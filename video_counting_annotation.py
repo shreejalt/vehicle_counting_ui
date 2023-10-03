@@ -3,6 +3,7 @@ from enum import Enum
 from functools import partial
 from PyQt6 import QtWidgets, QtGui, QtCore, QtMultimedia, QtMultimediaWidgets
 from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import QDir, Qt, QUrl, QSizeF
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
@@ -102,6 +103,7 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
             self.m_points[i] = self.mapFromScene(p)
             self.setPolygon(QtGui.QPolygonF(self.m_points))
 
+    
     def move_item(self, index, pos):
         if 0 <= index < len(self.m_items):
             item = self.m_items[index]
@@ -114,6 +116,7 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for i, point in enumerate(self.m_points):
                 self.move_item(i, self.mapToScene(point))
+            
         return super(PolygonAnnotation, self).itemChange(change, value)
 
     def mousePressEvent(self, event):
@@ -130,6 +133,7 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         super(PolygonAnnotation, self).hoverLeaveEvent(event)
  
 class AnnotationScene(QtWidgets.QGraphicsScene):
+    
     def __init__(self, parent=None):
         super(AnnotationScene, self).__init__(parent)
 
@@ -155,7 +159,6 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         self.player.setSource(QUrl.fromLocalFile(filename))
         self.setSceneRect(self.video_item.boundingRect())
 
-
     def deleteLastPolygon(self):
         
         if len(self.polygons) > 0:
@@ -180,6 +183,7 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
             for point in self.polygon_item.m_points:
                 p = (point.x(), point.y())
                 points = np.vstack((points, p))
+            
             mean = np.mean(points, axis=0)
             pt.setPos(mean[0], mean[1])
             self.polygon_item.position_label = pt
@@ -197,12 +201,14 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
             self.num_polygons += 1
             
     def mousePressEvent(self, event):
-        if self.current_instruction == Instructions.Polygon_Instruction:
+        
+        if self.current_instruction == Instructions.Polygon_Instruction and event.button() == Qt.MouseButton.LeftButton:
             self.polygon_item.removeLastPoint()
             self.polygon_item.addPoint(event.scenePos())
             self.polygon_item.addPoint(event.scenePos())
+            
         super(AnnotationScene, self).mousePressEvent(event)
-
+        
     def mouseMoveEvent(self, event):
         if self.current_instruction == Instructions.Polygon_Instruction:
             self.polygon_item.movePoint(self.polygon_item.number_of_points()-1, event.scenePos())
@@ -210,20 +216,70 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
 
 class QtPolygonViewer(QtWidgets.QGraphicsView):
 
+    rightMouseButtonPressed = pyqtSignal(float, float)
+    rightMouseButtonReleased = pyqtSignal(float, float)
+    rightMouseButtonDoubleClicked = pyqtSignal(float, float)
+
     def __init__(self, parent=None):
         super(QtPolygonViewer, self).__init__(parent)
         
         self.setRenderHints(QtGui.QPainter.RenderHint.Antialiasing | QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        self.setMouseTracking(True)
-        
+        self.setMouseTracking(True)    
+        self.zoomStack = list()    
+        self.aspectRatioMode = Qt.AspectRatioMode.KeepAspectRatio
         self.scene = AnnotationScene(parent)
         self.setScene(self.scene)
         
         self.fitInView(self.scene.video_item, Qt.AspectRatioMode.KeepAspectRatio)
+    
+    def updateViewer(self):
+    
+        if len(self.zoomStack) and self.sceneRect().contains(self.zoomStack[-1]):
+            self.fitInView(self.zoomStack[-1], Qt.AspectRatioMode.IgnoreAspectRatio)  # Show zoomed rect (ignore aspect ratio).
+        else:
+            self.zoomStack = []  # Clear the zoom stack (in case we got here because of an invalid zoom).
+            self.fitInView(self.sceneRect(), self.aspectRatioMode)  # Show entire image (use current aspect ratio mode).
+   
+    def mousePressEvent(self, event):
         
+        if event.button() == Qt.MouseButton.RightButton:
+            
+            scenePos = self.mapToScene(event.pos())
+            self.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+            self.rightMouseButtonPressed.emit(scenePos.x(), scenePos.y())
+        
+        super(QtPolygonViewer, self).mousePressEvent(event)
+        
+    def mouseReleaseEvent(self, event):
+        
+        super(QtPolygonViewer, self).mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.RightButton:
+            scenePos = self.mapToScene(event.pos())
+            viewBBox = self.zoomStack[-1] if len(self.zoomStack) else self.sceneRect()
+            selectionBBox = self.scene.selectionArea().boundingRect().intersected(viewBBox)
+            self.scene.setSelectionArea(QtGui.QPainterPath())  # Clear current selection area.
+            if selectionBBox.isValid() and (selectionBBox != viewBBox):
+                self.zoomStack.append(selectionBBox)
+                self.updateViewer()
+            self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
+            self.rightMouseButtonReleased.emit(scenePos.x(), scenePos.y())
+    
     def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.fitInView(self.scene.video_item, Qt.AspectRatioMode.KeepAspectRatio)
+        self.updateViewer()
+        
+    def mouseDoubleClickEvent(self, event):
+        
+        scenePos = self.mapToScene(event.pos())
+        if event.button() == Qt.MouseButton.RightButton:
+            self.zoomStack = []  # Clear zoom stack.
+            self.updateViewer()
+            self.rightMouseButtonDoubleClicked.emit(scenePos.x(), scenePos.y())
+        
+        QtWidgets.QGraphicsView.mouseDoubleClickEvent(self, event)
+
+    # def resizeEvent(self, event):
+    #     super().resizeEvent(event)
+    #     self.fitInView(self.scene.video_item, Qt.AspectRatioMode.KeepAspectRatio)
 
 class VideoCountingAnnotation(QMainWindow):
     
@@ -237,7 +293,6 @@ class VideoCountingAnnotation(QMainWindow):
         QtGui.QShortcut(QtCore.Qt.Key.Key_Space, self, activated=self.actionPlayVideo)
         QtGui.QShortcut(QtCore.Qt.Key.Key_Right, self, activated=self.actionForwardVideo)
         QtGui.QShortcut(QtCore.Qt.Key.Key_Left, self, activated=self.actionBackwardVideo)
-        
         
         self.buttons_and_labels = defaultdict(list)
         self.filename = 'roi'
@@ -284,6 +339,9 @@ class VideoCountingAnnotation(QMainWindow):
         self.savePolygonButton = QPushButton()
         self.savePolygonButton.setText('Save Progress')
         self.savePolygonButton.clicked.connect(self.actionSavePolygon)
+        self.loadROIButton = QPushButton()
+        self.loadROIButton.setText('Load ROI')
+        self.loadROIButton.clicked.connect(self.actionLoadROI)
         
         self.positionSlider = QSlider(Qt.Orientation.Horizontal)
         self.positionSlider.setRange(0, 0)
@@ -326,6 +384,10 @@ class VideoCountingAnnotation(QMainWindow):
         for label, ls in self.buttons_and_labels.items():
             ls[2].setText(str(self.annotationView.scene.clicks_inside_polygon[label].num_clicks))
     
+    def actionLoadROI(self):
+        
+        pass
+        
     def actionSavePolygon(self):
         
         roi_dict = defaultdict(dict)
