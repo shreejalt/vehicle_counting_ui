@@ -4,7 +4,7 @@ from functools import partial
 from PyQt6 import QtWidgets, QtGui, QtCore, QtMultimedia, QtMultimediaWidgets
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtCore import QDir, Qt, QUrl, QSizeF
+from PyQt6.QtCore import QDir, Qt, QUrl, QSizeF, QPointF
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
         QPushButton, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget, QMainWindow)
@@ -12,7 +12,6 @@ import sys
 import numpy as np
 import json
 import os
-
 
 # Point graphics class. Can move and hover around
 class GripItem(QtWidgets.QGraphicsPathItem):
@@ -74,12 +73,29 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
         self.m_items = []
         self.num_clicks = 0
-        self.position_label = None
         self.label = ''
+        self.id = QtWidgets.QGraphicsTextItem('', self)
+        self.id.setDefaultTextColor(QtGui.QColor(0, 255, 0))
+        self.id.setPos(0, 0)
+        self.id.setFont(QtGui.QFont('Arial', 20, QtGui.QFont.Weight.Bold))
         self.mainClass = main_class
- 
+        
     def number_of_points(self):
         return len(self.m_items)
+
+    def getPoints(self):
+        points = np.empty(shape=(0, 2))
+        for point in self.m_points:
+            p = (point.x(), point.y())
+            points = np.vstack((points, p))
+        mean = np.mean(points, axis=0)
+        return mean
+    
+    def moveLabel(self):
+        
+        mean_pos = self.getPoints()
+        self.id.setPos(QPointF(mean_pos[0], mean_pos[1]))
+        self.id.setPlainText(str(int(self.label) + 1))
 
     def addPoint(self, p):
         self.m_points.append(p)
@@ -102,8 +118,8 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         if 0 <= i < len(self.m_points):
             self.m_points[i] = self.mapFromScene(p)
             self.setPolygon(QtGui.QPolygonF(self.m_points))
+            self.moveLabel()
 
-    
     def move_item(self, index, pos):
         if 0 <= index < len(self.m_items):
             item = self.m_items[index]
@@ -116,6 +132,7 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             for i, point in enumerate(self.m_points):
                 self.move_item(i, self.mapToScene(point))
+            self.moveLabel()
             
         return super(PolygonAnnotation, self).itemChange(change, value)
 
@@ -159,40 +176,51 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         self.player.setSource(QUrl.fromLocalFile(filename))
         self.setSceneRect(self.video_item.boundingRect())
 
+    def load_roi(self, filename):
+        
+        with open(filename, 'r') as f:
+            rois = json.load(f)
+        
+        for key in rois.keys():
+            self.polygon_item = PolygonAnnotation(main_class=self.mainClass)
+            self.polygon_item.label = self.num_polygons
+            self.addItem(self.polygon_item)
+            self.clicks_inside_polygon[self.num_polygons] = self.polygon_item
+            self.num_polygons += 1
+            
+            points = np.array(rois[key]['roi'])
+            points[:, 0] *= 2560
+            points[:, 1] *= 1440
+            for point in points:
+                self.polygon_item.removeLastPoint()
+                self.polygon_item.addPoint(QPointF(point[0], point[1]))
+                self.polygon_item.addPoint(QPointF(point[0], point[1]))
+            self.polygon_item.removeLastPoint()
+            self.polygons.append(self.polygon_item)
+            self.polygon_item.moveLabel()
+            self.mainClass.addButtonsAndLabels(self.polygon_item.label)
+
     def deleteLastPolygon(self):
         
         if len(self.polygons) > 0:
             for item in self.polygons[-1].m_items:
                 self.removeItem(item)
-        
+                        
             self.removeItem(self.polygons[-1])
-            self.removeItem(self.polygon_labels[-1])
             self.num_polygons -= 1
             del self.polygons[-1]
-            del self.polygon_labels[-1]
         
     def setCurrentInstruction(self, instruction):
         
         if instruction == Instructions.No_Instruction and self.polygon_item is not None:
             self.polygon_item.removeLastPoint()
-            
-            pt = self.addText(str(self.num_polygons), QtGui.QFont('Arial', 40, QtGui.QFont.Weight.Bold))
-            pt.setDefaultTextColor(QtGui.QColor(255, 0, 0))
-            
-            points = np.empty(shape=(0, 2))
-            for point in self.polygon_item.m_points:
-                p = (point.x(), point.y())
-                points = np.vstack((points, p))
-            
-            mean = np.mean(points, axis=0)
-            pt.setPos(mean[0], mean[1])
-            self.polygon_item.position_label = pt
             self.polygons.append(self.polygon_item)
-            self.polygon_labels.append(pt)
+            self.polygon_item.moveLabel()
             self.mainClass.addButtonsAndLabels(self.polygon_item.label)
-        
+            self.polygon_item = None
+
         self.current_instruction = instruction
-        self.polygon_item = None
+        
         if self.current_instruction == Instructions.Polygon_Instruction:
             self.polygon_item = PolygonAnnotation(main_class=self.mainClass)
             self.polygon_item.label = self.num_polygons
@@ -211,7 +239,7 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         
     def mouseMoveEvent(self, event):
         if self.current_instruction == Instructions.Polygon_Instruction:
-            self.polygon_item.movePoint(self.polygon_item.number_of_points()-1, event.scenePos())
+            self.polygon_item.movePoint(self.polygon_item.number_of_points() - 1, event.scenePos())
         super(AnnotationScene, self).mouseMoveEvent(event)
 
 class QtPolygonViewer(QtWidgets.QGraphicsView):
@@ -277,9 +305,6 @@ class QtPolygonViewer(QtWidgets.QGraphicsView):
         
         QtWidgets.QGraphicsView.mouseDoubleClickEvent(self, event)
 
-    # def resizeEvent(self, event):
-    #     super().resizeEvent(event)
-    #     self.fitInView(self.scene.video_item, Qt.AspectRatioMode.KeepAspectRatio)
 
 class VideoCountingAnnotation(QMainWindow):
     
@@ -360,6 +385,7 @@ class VideoCountingAnnotation(QMainWindow):
         self.buttonLayout.setContentsMargins(0, 0, 0, 0)
         self.buttonLayout.addWidget(self.deleteLastPolygonButton)
         self.buttonLayout.addWidget(self.savePolygonButton)
+        self.buttonLayout.addWidget(self.loadROIButton)
         
         controlLayout = QHBoxLayout()
         controlLayout.setContentsMargins(0, 0, 0, 0)
@@ -386,7 +412,11 @@ class VideoCountingAnnotation(QMainWindow):
     
     def actionLoadROI(self):
         
-        pass
+        fileName, _ = QFileDialog.getOpenFileName(self, "Open Video",
+                QDir.homePath())
+        self.filename = os.path.splitext(os.path.basename(fileName))[0]
+        
+        self.annotationView.scene.load_roi(fileName)
         
     def actionSavePolygon(self):
         
@@ -410,13 +440,13 @@ class VideoCountingAnnotation(QMainWindow):
     def addButtonsAndLabels(self, label):
         
         deleteLastCountButton = QPushButton()
-        deleteLastCountButton.setText(f'Delete Last Count P{label}')
+        deleteLastCountButton.setText(f'Delete Last Count P{str(int(label) + 1)}')
         
         deleteLastCountButton.clicked.connect(partial(self.deleteLastCount, label))
         
         self.buttons_and_labels[label].append(deleteLastCountButton)
         countLabel = QLabel()
-        countLabel.setText(f'PC{label}: ')
+        countLabel.setText(f'PC{str(int(label) + 1)}: ')
         countLabelNo = QLabel()
         countLabelNo.setText('')
         
