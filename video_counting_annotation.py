@@ -6,12 +6,13 @@ from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import QDir, Qt, QUrl, QSizeF, QPointF
 from PyQt6.QtMultimedia import QMediaPlayer
-from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel,
-        QPushButton, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget, QMainWindow)
+from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+        QPushButton, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget, QMainWindow, QListWidget)
 import sys
 import numpy as np
 import json
 import os
+from collections import deque 
 
 # Point graphics class. Can move and hover around
 class GripItem(QtWidgets.QGraphicsPathItem):
@@ -54,12 +55,14 @@ class GripItem(QtWidgets.QGraphicsPathItem):
             self.m_annotation_item.movePoint(self.m_index, value)
         return super(GripItem, self).itemChange(change, value)
     
+    
 class Instructions(Enum):
     No_Instruction = 0
     Polygon_Instruction = 1
  
+ 
 class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
-    def __init__(self, parent=None, main_class=None):
+    def __init__(self, parent=None, main_class=None, calling_class=None):
         super(PolygonAnnotation, self).__init__(parent)
         self.m_points = []
         self.setZValue(10)
@@ -79,6 +82,7 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         self.id.setPos(0, 0)
         self.id.setFont(QtGui.QFont('Arial', 20, QtGui.QFont.Weight.Bold))
         self.mainClass = main_class
+        self.calling_class = calling_class
         
     def number_of_points(self):
         return len(self.m_items)
@@ -135,12 +139,14 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
             self.moveLabel()
             
         return super(PolygonAnnotation, self).itemChange(change, value)
-
-    def mousePressEvent(self, event):
-        self.num_clicks += 1
-        self.mainClass.setLabels()
-        return super(PolygonAnnotation, self).mousePressEvent(event)
     
+    def mousePressEvent(self, event):
+        
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.num_clicks += 1
+            self.mainClass.setLabels()
+            return super(PolygonAnnotation, self).mousePressEvent(event)
+        
     def hoverEnterEvent(self, event):
         self.setBrush(QtGui.QColor(255, 0, 0, 100))
         super(PolygonAnnotation, self).hoverEnterEvent(event)
@@ -154,6 +160,11 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
     def __init__(self, parent=None):
         super(AnnotationScene, self).__init__(parent)
 
+        self.mainClass = parent
+        self.set_default()
+      
+    def set_default(self):
+        
         # For video
         self.player = QtMultimedia.QMediaPlayer()
         self.video_item = QtMultimediaWidgets.QGraphicsVideoItem()
@@ -162,8 +173,7 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         self.player.setVideoOutput(self.video_item)
         self.addItem(self.video_item)
         
-        self.mainClass = parent
-
+        
         self.current_instruction = Instructions.No_Instruction
         self.polygon_item = None
         self.num_polygons = 0
@@ -180,34 +190,40 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         
         with open(filename, 'r') as f:
             rois = json.load(f)
-        
-        for key in rois.keys():
-            self.polygon_item = PolygonAnnotation(main_class=self.mainClass)
-            self.polygon_item.label = self.num_polygons
-            self.addItem(self.polygon_item)
-            self.clicks_inside_polygon[self.num_polygons] = self.polygon_item
-            self.num_polygons += 1
-            
-            points = np.array(rois[key]['roi'])
-            points[:, 0] *= 2560
-            points[:, 1] *= 1440
-            for point in points:
-                self.polygon_item.removeLastPoint()
-                self.polygon_item.addPoint(QPointF(point[0], point[1]))
-                self.polygon_item.addPoint(QPointF(point[0], point[1]))
-            self.polygon_item.removeLastPoint()
-            self.polygons.append(self.polygon_item)
-            self.polygon_item.moveLabel()
-            self.mainClass.addButtonsAndLabels(self.polygon_item.label)
 
+        for key in rois.keys():
+            if key != 'group':
+                self.polygon_item = PolygonAnnotation(main_class=self.mainClass, calling_class=self)
+                self.polygon_item.label = self.num_polygons
+                self.addItem(self.polygon_item)
+                self.polygon_item.num_clicks = int(rois[key]['counts'])
+                self.clicks_inside_polygon[self.num_polygons] = self.polygon_item
+                self.num_polygons += 1
+                
+                points = np.array(rois[key]['roi'])
+                points[:, 0] *= 2560
+                points[:, 1] *= 1440
+                for point in points:
+                    self.polygon_item.removeLastPoint()
+                    self.polygon_item.addPoint(QPointF(point[0], point[1]))
+                    self.polygon_item.addPoint(QPointF(point[0], point[1]))
+                self.polygon_item.removeLastPoint()
+                self.polygons.append(self.polygon_item)
+                self.polygon_item.moveLabel()
+                self.mainClass.addButtonsAndLabels(self.polygon_item.label)
+           
+        self.mainClass.setLabels()
+        
     def deleteLastPolygon(self):
         
         if len(self.polygons) > 0:
             for item in self.polygons[-1].m_items:
                 self.removeItem(item)
-                        
+            
             self.removeItem(self.polygons[-1])
+            del self.clicks_inside_polygon[self.num_polygons - 1]
             self.num_polygons -= 1
+            
             del self.polygons[-1]
         
     def setCurrentInstruction(self, instruction):
@@ -217,12 +233,13 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
             self.polygons.append(self.polygon_item)
             self.polygon_item.moveLabel()
             self.mainClass.addButtonsAndLabels(self.polygon_item.label)
+           
             self.polygon_item = None
-
+            
         self.current_instruction = instruction
         
         if self.current_instruction == Instructions.Polygon_Instruction:
-            self.polygon_item = PolygonAnnotation(main_class=self.mainClass)
+            self.polygon_item = PolygonAnnotation(main_class=self.mainClass, calling_class=self)
             self.polygon_item.label = self.num_polygons
             self.addItem(self.polygon_item)
             self.clicks_inside_polygon[self.num_polygons] = self.polygon_item
@@ -234,7 +251,7 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
             self.polygon_item.removeLastPoint()
             self.polygon_item.addPoint(event.scenePos())
             self.polygon_item.addPoint(event.scenePos())
-            
+
         super(AnnotationScene, self).mousePressEvent(event)
         
     def mouseMoveEvent(self, event):
@@ -246,6 +263,7 @@ class QtPolygonViewer(QtWidgets.QGraphicsView):
 
     rightMouseButtonPressed = pyqtSignal(float, float)
     rightMouseButtonReleased = pyqtSignal(float, float)
+
     rightMouseButtonDoubleClicked = pyqtSignal(float, float)
 
     def __init__(self, parent=None):
@@ -318,7 +336,8 @@ class VideoCountingAnnotation(QMainWindow):
         QtGui.QShortcut(QtCore.Qt.Key.Key_Space, self, activated=self.actionPlayVideo)
         QtGui.QShortcut(QtCore.Qt.Key.Key_Right, self, activated=self.actionForwardVideo)
         QtGui.QShortcut(QtCore.Qt.Key.Key_Left, self, activated=self.actionBackwardVideo)
-        
+        QtGui.QShortcut(QtCore.Qt.Key.Key_G, self, activated=self.actionGroupPolygons)
+        QtGui.QShortcut(QtCore.Qt.Key.Key_C, self, activated=self.actionResetAll)
         self.buttons_and_labels = defaultdict(list)
         self.filename = 'roi'
         self.fowrwad_milliseconds = 1000
@@ -367,6 +386,9 @@ class VideoCountingAnnotation(QMainWindow):
         self.loadROIButton = QPushButton()
         self.loadROIButton.setText('Load ROI')
         self.loadROIButton.clicked.connect(self.actionLoadROI)
+        self.resetCountsButton = QPushButton()
+        self.resetCountsButton.setText('Reset Counts')
+        self.resetCountsButton.clicked.connect(self.actionResetCounts)
         
         self.positionSlider = QSlider(Qt.Orientation.Horizontal)
         self.positionSlider.setRange(0, 0)
@@ -380,15 +402,23 @@ class VideoCountingAnnotation(QMainWindow):
         
         wid = QWidget()
         self.setCentralWidget(wid)
+        self.num_buttons = 0
         
-        self.buttonLayout = QHBoxLayout()
-        self.buttonLayout.setContentsMargins(0, 0, 0, 0)
-        self.buttonLayout.addWidget(self.deleteLastPolygonButton)
-        self.buttonLayout.addWidget(self.savePolygonButton)
-        self.buttonLayout.addWidget(self.loadROIButton)
+        self.buttonMainLayout = QHBoxLayout()
+        self.buttonMainLayout.addWidget(self.deleteLastPolygonButton)
+        self.buttonMainLayout.addWidget(self.savePolygonButton)
+        self.buttonMainLayout.addWidget(self.loadROIButton)
+        self.buttonMainLayout.addWidget(self.resetCountsButton)
+      
+        
+        self.buttonVerticalLayout = QVBoxLayout()
+        
+        self.buttonSubLayout1 = QHBoxLayout()
+        self.buttonSubLayout2 = QHBoxLayout()
+        self.buttonVerticalLayout.addLayout(self.buttonSubLayout1)
+        self.buttonVerticalLayout.addLayout(self.buttonSubLayout2)
         
         controlLayout = QHBoxLayout()
-        controlLayout.setContentsMargins(0, 0, 0, 0)
         controlLayout.addWidget(self.playButton)
         controlLayout.addWidget(self.positionSlider)
         controlLayout.addWidget(self.labelTimer)
@@ -396,8 +426,9 @@ class VideoCountingAnnotation(QMainWindow):
         layout = QVBoxLayout()
         layout.addWidget(self.annotationView)
         layout.addLayout(controlLayout)
-        layout.addLayout(self.buttonLayout)
-        
+        layout.addLayout(self.buttonMainLayout)
+        layout.addLayout(self.buttonVerticalLayout)
+         
         wid.setLayout(layout)
         
         self.annotationView.scene.player.playbackStateChanged.connect(self.actionMediaStateChanged)
@@ -405,6 +436,42 @@ class VideoCountingAnnotation(QMainWindow):
         self.annotationView.scene.player.durationChanged.connect(self.actionDurationChanged)
         self.annotationView.scene.player.errorOccurred.connect(self.actionHandleError)
     
+        self.filename = None
+        self.group_polygons = dict()
+
+    def actionResetAll(self):
+        
+        self.group_polygons = dict()
+        self.annotationView.scene.clear()
+        self.annotationView.scene.set_default()
+        self.deleteAllPolygons()
+        self.labelTimer.setText('00:00:00/00:00:00')
+        self.filename = None
+        self.positionSlider.setRange(0, 0)
+        
+        self.annotationView.scene.player.playbackStateChanged.connect(self.actionMediaStateChanged)
+        self.annotationView.scene.player.positionChanged.connect(self.actionPositionChanged)
+        self.annotationView.scene.player.durationChanged.connect(self.actionDurationChanged)
+        self.annotationView.scene.player.errorOccurred.connect(self.actionHandleError)
+        
+        
+    def actionGroupPolygons(self):
+        text, ok = QtWidgets.QInputDialog().getMultiLineText(self, "Group Assigner",
+                                     "Grouping Items:",
+                                     "First line - Group Name\nSecond line - Group IDs (Followed by space)")
+        
+        groups = text.splitlines()
+        groups = dict(zip(groups[::2], groups[1::2]))
+        if ok:
+           for key, value in groups.items():
+               self.group_polygons[key] = list(map(int, value.strip().split()))
+        
+    def actionResetCounts(self):
+        for key in self.annotationView.scene.clicks_inside_polygon:
+            self.annotationView.scene.clicks_inside_polygon[key].num_clicks = 0
+
+        self.setLabels()
+
     def setLabels(self):
         
         for label, ls in self.buttons_and_labels.items():
@@ -412,9 +479,11 @@ class VideoCountingAnnotation(QMainWindow):
     
     def actionLoadROI(self):
         
-        fileName, _ = QFileDialog.getOpenFileName(self, "Open Video",
+        fileName, _ = QFileDialog.getOpenFileName(self, "Open ROI File",
                 QDir.homePath())
-        self.filename = os.path.splitext(os.path.basename(fileName))[0]
+        
+        if self.filename is None:
+            self.filename = os.path.splitext(os.path.basename(fileName))[0]
         
         self.annotationView.scene.load_roi(fileName)
         
@@ -431,15 +500,24 @@ class VideoCountingAnnotation(QMainWindow):
             points[:, 0] /= self.annotationView.scene.video_item.size().width()
             points[:, 1] /= self.annotationView.scene.video_item.size().height()
             
-            roi_dict[label]['roi'] = points.tolist()
-            roi_dict[label]['counts'] = polygon.num_clicks
-        
+            roi_dict[label + 1]['roi'] = points.tolist()
+            
+            if self.buttons_and_labels[label][3].text() != '':
+                roi_dict[label + 1]['counts'] = int(self.buttons_and_labels[label][3].text())
+            else:
+                
+                roi_dict[label + 1]['counts'] = polygon.num_clicks
+
+        for key, value in self.group_polygons.items():
+            roi_dict['group'][key] = value
+
         with open(f'{self.filename}.json', 'w') as f:
-            json.dump(roi_dict, f)
+            json.dump(roi_dict, f, indent=2)
         
     def addButtonsAndLabels(self, label):
         
         deleteLastCountButton = QPushButton()
+        
         deleteLastCountButton.setText(f'Delete Last Count P{str(int(label) + 1)}')
         
         deleteLastCountButton.clicked.connect(partial(self.deleteLastCount, label))
@@ -449,20 +527,31 @@ class VideoCountingAnnotation(QMainWindow):
         countLabel.setText(f'PC{str(int(label) + 1)}: ')
         countLabelNo = QLabel()
         countLabelNo.setText('')
-        
+        countLineEdit = QLineEdit()
         self.buttons_and_labels[label].append(countLabel)
         self.buttons_and_labels[label].append(countLabelNo)
-        self.buttonLayout.addWidget(deleteLastCountButton)
-        self.buttonLayout.addWidget(countLabel)
-        self.buttonLayout.addWidget(countLabelNo)
+        self.buttons_and_labels[label].append(countLineEdit)
+        
+        layout = self.buttonSubLayout1 if (self.num_buttons % 2 == 0) else self.buttonSubLayout2
+        layout.addWidget(deleteLastCountButton)
+        layout.addWidget(countLabel)
+        layout.addWidget(countLabelNo)
+        layout.addWidget(countLineEdit)
         
         self.last_added_label = label
+        self.num_buttons += 1
         
     def deleteLastCount(self, label):
 
         self.annotationView.scene.clicks_inside_polygon[label].num_clicks -= 1
         self.setLabels()
     
+    
+    def deleteAllPolygons(self):
+        
+        while len(self.buttons_and_labels) > 0:
+            self.actionDeleteLastPolygon()
+            
     def actionDeleteLastPolygon(self):
         
         if len(self.buttons_and_labels) > 0:
@@ -471,8 +560,10 @@ class VideoCountingAnnotation(QMainWindow):
             self.buttons_and_labels[last_key][0].deleteLater()
             self.buttons_and_labels[last_key][1].deleteLater()
             self.buttons_and_labels[last_key][2].deleteLater()
+            self.buttons_and_labels[last_key][3].deleteLater()
             
             del self.buttons_and_labels[last_key]
+            self.num_buttons -= 1
 
     def actionForwardVideo(self):
         curr_position = self.annotationView.scene.player.position()
