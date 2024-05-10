@@ -12,7 +12,6 @@ import sys
 import numpy as np
 import json
 import os
-from collections import deque 
 
 # Point graphics class. Can move and hover around
 class GripItem(QtWidgets.QGraphicsPathItem):
@@ -338,6 +337,7 @@ class VideoCountingAnnotation(QMainWindow):
         QtGui.QShortcut(QtCore.Qt.Key.Key_Left, self, activated=self.actionBackwardVideo)
         QtGui.QShortcut(QtCore.Qt.Key.Key_G, self, activated=self.actionGroupPolygons)
         QtGui.QShortcut(QtCore.Qt.Key.Key_C, self, activated=self.actionResetAll)
+        
         self.buttons_and_labels = defaultdict(list)
         self.filename = 'roi'
         self.fowrwad_milliseconds = 1000

@@ -118,10 +118,10 @@ class RectangleAnnotation(QtWidgets.QGraphicsRectItem):
                  
         elif name == 'bottom_right' and self.bottom_right is not None:
             self.bottom_right = self.mapFromScene(pos)
-            self.setRect(QtCore.QRectF(self.top_left, self.bottom_right))
             
             self.bottom_right_coords.setPlainText(f'{self.bottom_right.x(): .2f}, {self.bottom_right.y(): .2f}')
             self.bottom_right_coords.setPos(self.bottom_right)
+            self.setRect(QtCore.QRectF(self.top_left, self.bottom_right))
             
         if self.top_left is not None and self.bottom_right is not None:
             tlx, tly, brx, bry = self.top_left.x(), self.top_left.y(), self.bottom_right.x(), self.bottom_right.y()
@@ -130,13 +130,17 @@ class RectangleAnnotation(QtWidgets.QGraphicsRectItem):
             
     def moveItem(self):
         
+        
         self.top_left_item.setEnabled(False)
         self.top_left_item.setPos(self.mapToScene(self.rect().topLeft()))
         self.top_left_item.setEnabled(True)
+        self.top_left = self.mapToScene(self.rect().topLeft())
         
+
         self.bottom_right_item.setEnabled(False)
         self.bottom_right_item.setPos(self.mapToScene(self.rect().bottomRight()))
         self.bottom_right_item.setEnabled(True)
+        self.bottom_right = self.mapToScene(self.rect().bottomRight())
         
         self.top_left_coords.setPlainText(f'{self.top_left.x(): .2f}, {self.top_left.y(): .2f}')
         self.bottom_right_coords.setPlainText(f'{self.bottom_right.x(): .2f}, {self.bottom_right.y(): .2f}')
