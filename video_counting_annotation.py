@@ -341,6 +341,7 @@ class VideoCountingAnnotation(QMainWindow):
         self.buttons_and_labels = defaultdict(list)
         self.filename = 'roi'
         self.fowrwad_milliseconds = 1000
+        self.num_lanes = 3
         
         # Add menubar for loading the video and exiting the application
         menuBar = self.menuBar()
@@ -417,6 +418,7 @@ class VideoCountingAnnotation(QMainWindow):
         self.buttonSubLayout2 = QHBoxLayout()
         self.buttonVerticalLayout.addLayout(self.buttonSubLayout1)
         self.buttonVerticalLayout.addLayout(self.buttonSubLayout2)
+
         
         controlLayout = QHBoxLayout()
         controlLayout.addWidget(self.playButton)
@@ -521,23 +523,44 @@ class VideoCountingAnnotation(QMainWindow):
         deleteLastCountButton.setText(f'Delete Last Count P{str(int(label) + 1)}')
         
         deleteLastCountButton.clicked.connect(partial(self.deleteLastCount, label))
-        
-        self.buttons_and_labels[label].append(deleteLastCountButton)
+       
         countLabel = QLabel()
         countLabel.setText(f'PC{str(int(label) + 1)}: ')
         countLabelNo = QLabel()
         countLabelNo.setText('')
         countLineEdit = QLineEdit()
-        self.buttons_and_labels[label].append(countLabel)
-        self.buttons_and_labels[label].append(countLabelNo)
-        self.buttons_and_labels[label].append(countLineEdit)
-        
+       
         layout = self.buttonSubLayout1 if (self.num_buttons % 2 == 0) else self.buttonSubLayout2
-        layout.addWidget(deleteLastCountButton)
-        layout.addWidget(countLabel)
-        layout.addWidget(countLabelNo)
-        layout.addWidget(countLineEdit)
-        
+
+        # Add lane counts
+        parentLayout = QVBoxLayout()
+        countLayout = QHBoxLayout()
+        laneLayout = QHBoxLayout()
+        for i in range(self.num_lanes):
+            
+            label = QLabel()
+            label.setText(f'L {i + 1}')
+            labelNo = QLabel()
+            labelNo.setText('')
+            lineEdit = QLineEdit()
+            laneLayout.addWidget(label)
+            laneLayout.addWidget(labelNo)
+            laneLayout.addWidget(lineEdit)
+
+        countLayout.addWidget(deleteLastCountButton)
+        countLayout.addWidget(countLabel)
+        countLayout.addWidget(countLabelNo)
+        countLayout.addWidget(countLineEdit)
+
+        parentLayout.addLayout(countLayout)
+        parentLayout.addLayout(laneLayout)
+
+        layout.addLayout(parentLayout)
+
+
+        self.buttons_and_labels[label].append(countLayout)
+        self.buttons_and_labels[label].append(laneLayout)
+
         self.last_added_label = label
         self.num_buttons += 1
         
@@ -557,11 +580,22 @@ class VideoCountingAnnotation(QMainWindow):
         if len(self.buttons_and_labels) > 0:
             self.annotationView.scene.deleteLastPolygon()
             last_key = list(self.buttons_and_labels.keys())[-1]
-            self.buttons_and_labels[last_key][0].deleteLater()
-            self.buttons_and_labels[last_key][1].deleteLater()
-            self.buttons_and_labels[last_key][2].deleteLater()
-            self.buttons_and_labels[last_key][3].deleteLater()
             
+            countLayout = self.buttons_and_labels[last_key][0]
+            laneLayout = self.buttons_and_labels[last_key][1]
+
+            while countLayout.count():
+                item = countLayout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+            while laneLayout.count():
+                item = laneLayout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
             del self.buttons_and_labels[last_key]
             self.num_buttons -= 1
 
