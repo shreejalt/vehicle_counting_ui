@@ -7,7 +7,7 @@ from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import QDir, Qt, QUrl, QSizeF, QPointF
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-        QPushButton, QSizePolicy, QSlider, QStyle, QVBoxLayout, QWidget, QMainWindow, QListWidget)
+        QPushButton, QSizePolicy, QSlider, QComboBox, QStyle, QVBoxLayout, QWidget, QMainWindow, QListWidget)
 import sys
 import numpy as np
 import json
@@ -81,6 +81,8 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         self.id.setPos(0, 0)
         self.id.setFont(QtGui.QFont('Arial', 20, QtGui.QFont.Weight.Bold))
         self.mainClass = main_class
+        self.num_lanes = self.mainClass.num_lanes
+        self.lane_num_clicks = defaultdict(int)
         self.calling_class = calling_class
         
     def number_of_points(self):
@@ -142,7 +144,13 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
     def mousePressEvent(self, event):
         
         if event.button() == Qt.MouseButton.LeftButton:
-            self.num_clicks += 1
+            
+            if not self.mainClass.lanesLocked:
+                self.num_clicks += 1
+                
+            if self.mainClass.activeLane > 0:
+                self.lane_num_clicks[self.mainClass.activeLane] += 1
+                
             self.mainClass.setLabels()
             return super(PolygonAnnotation, self).mousePressEvent(event)
         
@@ -172,7 +180,6 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         self.player.setVideoOutput(self.video_item)
         self.addItem(self.video_item)
         
-        
         self.current_instruction = Instructions.No_Instruction
         self.polygon_item = None
         self.num_polygons = 0
@@ -196,6 +203,10 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
                 self.polygon_item.label = self.num_polygons
                 self.addItem(self.polygon_item)
                 self.polygon_item.num_clicks = int(rois[key]['counts'])
+                
+                if 'lanes' in rois[key]:
+                    self.polygon_item.lane_num_clicks = rois[key]['lanes']
+                    self.polygon_item.lane_num_clicks = {int(k): int(v) for k, v in rois[key]['lanes'].items()}
                 self.clicks_inside_polygon[self.num_polygons] = self.polygon_item
                 self.num_polygons += 1
                 
@@ -272,7 +283,7 @@ class QtPolygonViewer(QtWidgets.QGraphicsView):
         self.setMouseTracking(True)    
         self.zoomStack = list()    
         self.aspectRatioMode = Qt.AspectRatioMode.KeepAspectRatio
-        self.scene = AnnotationScene(parent)
+        self.scene = AnnotationScene(parent) 
         self.setScene(self.scene)
         
         self.fitInView(self.scene.video_item, Qt.AspectRatioMode.KeepAspectRatio)
@@ -327,7 +338,7 @@ class VideoCountingAnnotation(QMainWindow):
     
     def __init__(self, parent=None):
         super(VideoCountingAnnotation, self).__init__(parent=parent)
-        self.setWindowTitle('Counting Annotation Tool')
+        self.setWindowTitle('Video Counting Annotation Tool')
         
         self.annotationView = QtPolygonViewer(self)
         
@@ -337,7 +348,7 @@ class VideoCountingAnnotation(QMainWindow):
         QtGui.QShortcut(QtCore.Qt.Key.Key_Left, self, activated=self.actionBackwardVideo)
         QtGui.QShortcut(QtCore.Qt.Key.Key_G, self, activated=self.actionGroupPolygons)
         QtGui.QShortcut(QtCore.Qt.Key.Key_C, self, activated=self.actionResetAll)
-        
+
         self.buttons_and_labels = defaultdict(list)
         self.filename = 'roi'
         self.fowrwad_milliseconds = 1000
@@ -390,6 +401,21 @@ class VideoCountingAnnotation(QMainWindow):
         self.resetCountsButton = QPushButton()
         self.resetCountsButton.setText('Reset Counts')
         self.resetCountsButton.clicked.connect(self.actionResetCounts)
+        self.lockLanesButton = QPushButton()
+        self.lockLanesButton.setText('Lock Lanes')
+        self.lanesLocked = False
+        self.lockLanesButton.clicked.connect(self.actionLockLanes)
+        
+         
+        # Add lane information
+        self.laneCombo = QComboBox()
+        self.laneCombo.addItem('No Lane')
+        for i in range(self.num_lanes):
+            self.laneCombo.addItem(f'{i + 1}')
+        
+        self.laneCombo.activated.connect(self.actionChangedCombo)
+        
+        self.activeLane = 0
         
         self.positionSlider = QSlider(Qt.Orientation.Horizontal)
         self.positionSlider.setRange(0, 0)
@@ -410,8 +436,9 @@ class VideoCountingAnnotation(QMainWindow):
         self.buttonMainLayout.addWidget(self.savePolygonButton)
         self.buttonMainLayout.addWidget(self.loadROIButton)
         self.buttonMainLayout.addWidget(self.resetCountsButton)
+        self.buttonMainLayout.addWidget(self.laneCombo)
+        self.buttonMainLayout.addWidget(self.lockLanesButton)
       
-        
         self.buttonVerticalLayout = QVBoxLayout()
         
         self.buttonSubLayout1 = QHBoxLayout()
@@ -441,6 +468,22 @@ class VideoCountingAnnotation(QMainWindow):
         self.filename = None
         self.group_polygons = dict()
 
+    def actionLockLanes(self):
+        
+        self.lanesLocked = not self.lanesLocked
+        print(self.lanesLocked)
+        if self.lanesLocked:
+            self.lockLanesButton.setText('Unlock Lanes')
+        else:
+            self.lockLanesButton.setText('Lock Lanes')
+
+    def actionChangedCombo(self, index):
+        
+        if self.activeLane > 0 and index == 0:
+            self.addLaneLabels()
+            
+        self.activeLane = index
+        
     def actionResetAll(self):
         
         self.group_polygons = dict()
@@ -469,16 +512,37 @@ class VideoCountingAnnotation(QMainWindow):
                self.group_polygons[key] = list(map(int, value.strip().split()))
         
     def actionResetCounts(self):
+        
         for key in self.annotationView.scene.clicks_inside_polygon:
             self.annotationView.scene.clicks_inside_polygon[key].num_clicks = 0
+            for laneNo in self.annotationView.scene.clicks_inside_polygon[key].lane_num_clicks:
+                self.annotationView.scene.clicks_inside_polygon[key].lane_num_clicks[laneNo] = 0
 
         self.setLabels()
 
+
+    def addLaneLabels(self):
+        
+        for label, _ in self.buttons_and_labels.items():
+           for laneNo in self.annotationView.scene.clicks_inside_polygon[label].lane_num_clicks:
+                self.annotationView.scene.clicks_inside_polygon[label].num_clicks += self.annotationView.scene.clicks_inside_polygon[label].lane_num_clicks[laneNo]
+        
+        self.setLabels()
+            
     def setLabels(self):
         
-        for label, ls in self.buttons_and_labels.items():
-            ls[2].setText(str(self.annotationView.scene.clicks_inside_polygon[label].num_clicks))
-    
+        for label, _ in self.buttons_and_labels.items():
+
+            currLayout = self.buttons_and_labels[label][0]
+            laneLayout = self.buttons_and_labels[label][1]
+            item = currLayout.itemAt(2).widget()
+            item.setText(str(self.annotationView.scene.clicks_inside_polygon[label].num_clicks))
+            
+            for i in range(laneLayout.count()):
+                if (i % 3) == 1:
+                    itemLane = laneLayout.itemAt(i).widget()
+                    itemLane.setText(str(self.annotationView.scene.clicks_inside_polygon[label].lane_num_clicks[(i // self.num_lanes) + 1]))
+          
     def actionLoadROI(self):
         
         fileName, _ = QFileDialog.getOpenFileName(self, "Open ROI File",
@@ -492,6 +556,8 @@ class VideoCountingAnnotation(QMainWindow):
     def actionSavePolygon(self):
         
         roi_dict = defaultdict(dict)
+        # Assert that the all lane labels sums up to the individual lane labels
+        
         for label, polygon in self.annotationView.scene.clicks_inside_polygon.items():
             points = np.empty(shape=(0, 2))
             for point in polygon.m_points:
@@ -504,12 +570,24 @@ class VideoCountingAnnotation(QMainWindow):
             
             roi_dict[label + 1]['roi'] = points.tolist()
             
-            if self.buttons_and_labels[label][3].text() != '':
-                roi_dict[label + 1]['counts'] = int(self.buttons_and_labels[label][3].text())
+            if self.buttons_and_labels[label][0].itemAt(3).widget().text() != '':
+                roi_dict[label + 1]['counts'] = int(self.buttons_and_labels[label][0].itemAt(3).widget().text())
             else:
-                
                 roi_dict[label + 1]['counts'] = polygon.num_clicks
+            
+            # Add lane counts if any
+            roi_dict[label + 1]['lanes'] = dict()
 
+            laneLayout = self.buttons_and_labels[label][1]
+            for i in range(laneLayout.count()):
+                if (i % 3) == 2:
+                    
+                    textLane = laneLayout.itemAt(i).widget()
+                    if textLane.text() != '':
+                        roi_dict[label + 1]['lanes'][int((i // 3) + 1)] = int(textLane.text())
+                    else:
+                        roi_dict[label + 1]['lanes'][int((i // 3) + 1)] = self.annotationView.scene.clicks_inside_polygon[label].lane_num_clicks[(i // 3) + 1]
+                    
         for key, value in self.group_polygons.items():
             roi_dict['group'][key] = value
 
@@ -518,32 +596,34 @@ class VideoCountingAnnotation(QMainWindow):
         
     def addButtonsAndLabels(self, label):
         
+        # Adding counting buttons and labels
         deleteLastCountButton = QPushButton()
-        
         deleteLastCountButton.setText(f'Delete Last Count P{str(int(label) + 1)}')
-        
         deleteLastCountButton.clicked.connect(partial(self.deleteLastCount, label))
-       
         countLabel = QLabel()
         countLabel.setText(f'PC{str(int(label) + 1)}: ')
         countLabelNo = QLabel()
         countLabelNo.setText('')
         countLineEdit = QLineEdit()
        
+        # Selecting the main layout
         layout = self.buttonSubLayout1 if (self.num_buttons % 2 == 0) else self.buttonSubLayout2
 
         # Add lane counts
         parentLayout = QVBoxLayout()
+        
         countLayout = QHBoxLayout()
         laneLayout = QHBoxLayout()
+        
         for i in range(self.num_lanes):
             
-            label = QLabel()
-            label.setText(f'L {i + 1}')
+            labelText = QLabel()
+          
+            labelText.setText(f'L{i + 1}: ')
             labelNo = QLabel()
             labelNo.setText('')
             lineEdit = QLineEdit()
-            laneLayout.addWidget(label)
+            laneLayout.addWidget(labelText)
             laneLayout.addWidget(labelNo)
             laneLayout.addWidget(lineEdit)
 
@@ -557,7 +637,6 @@ class VideoCountingAnnotation(QMainWindow):
 
         layout.addLayout(parentLayout)
 
-
         self.buttons_and_labels[label].append(countLayout)
         self.buttons_and_labels[label].append(laneLayout)
 
@@ -565,10 +644,15 @@ class VideoCountingAnnotation(QMainWindow):
         self.num_buttons += 1
         
     def deleteLastCount(self, label):
-
-        self.annotationView.scene.clicks_inside_polygon[label].num_clicks -= 1
-        self.setLabels()
+        
+        if self.activeLane > 0:
+            self.annotationView.scene.clicks_inside_polygon[label].lane_num_clicks[self.activeLane] -= 1
+        
+        if not self.lanesLocked:
+            self.annotationView.scene.clicks_inside_polygon[label].num_clicks -= 1
     
+        self.setLabels()
+            
     
     def deleteAllPolygons(self):
         
@@ -592,7 +676,7 @@ class VideoCountingAnnotation(QMainWindow):
 
             while laneLayout.count():
                 item = laneLayout.takeAt(0)
-                widget = item.widget()
+                widget = item.widget() 
                 if widget is not None:
                     widget.deleteLater()
 
