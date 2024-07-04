@@ -3,9 +3,38 @@ from functools import partial
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (QHBoxLayout, QPushButton, QVBoxLayout, QWidget)
-import json
+import cv2
+import numpy as np
 from collections import defaultdict
+import os
 
+def convert_cv_qt(cv_img):
+    rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+    h, w, ch = rgb_image.shape
+    bytes_per_line = ch * w
+    convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
+    p = convert_to_Qt_format.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio)
+    return QtGui.QPixmap.fromImage(p)
+
+class Instructions(Enum):
+    No_Instruction = 0
+    Point_Instruction = 1
+
+class ImagePopup(QtWidgets.QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        
+        self.setWindowTitle('Homography Image')
+        self.label = QtWidgets.QLabel(self)
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.label)
+        self.setLayout(self.layout)
+        self.adjustSize()
+    
+    def setImage(self, img):
+        pix_img = convert_cv_qt(img)
+        self.label.setPixmap(pix_img)
+        
 class GripItem(QtWidgets.QGraphicsPathItem):
     
     circle = QtGui.QPainterPath()
@@ -49,15 +78,10 @@ class GripItem(QtWidgets.QGraphicsPathItem):
             self.annotation_item.movePoint(value, self.id)
         return super(GripItem, self).itemChange(change, value)
 
-class Instructions(Enum):
-    No_Instruction = 0
-    Point_Instruction = 1
-
-
 class PointAnnotation(QtWidgets.QGraphicsItem):
     
     def __init__(self, parent=None):
-        super(PointAnnotation, self).__init__(parent)
+        super(PointAnnotation, self).__init__()
         self.setZValue(10)
         self.setAcceptHoverEvents(True)
         self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -67,8 +91,9 @@ class PointAnnotation(QtWidgets.QGraphicsItem):
         self.coords = QtWidgets.QGraphicsTextItem('', self)
         self.coords.setDefaultTextColor(QtGui.QColor(0, 255, 0))
         self.coords.setPos(0, 0)
-        self.coords.setFont(QtGui.QFont('Arial', 20, QtGui.QFont.Weight.Bold))
+        self.coords.setFont(QtGui.QFont('Arial', 10, QtGui.QFont.Weight.Bold))
         self.point = None
+        self.parent = parent
         
     @property
     def points(self):
@@ -82,7 +107,6 @@ class PointAnnotation(QtWidgets.QGraphicsItem):
         self.point.setPos(self.c)
         self.coords.setPlainText(f'ID: {id} {self.c.x(): .2f}, {self.c.y(): .2f}')
         self.coords.setPos(self.c)
-    
 
     def movePoint(self, pos, id):
             
@@ -91,150 +115,31 @@ class PointAnnotation(QtWidgets.QGraphicsItem):
         self.coords.setPos(self.c)
         self.coords.setPlainText(f'ID: {id} {self.c.x(): .2f}, {self.c.y(): .2f}')
 
-        
-class RectangleAnnotation(QtWidgets.QGraphicsRectItem):
-    
-    def __init__(self, parent=None):
-        super(RectangleAnnotation, self).__init__(parent)
-        
-        self.setZValue(10)
-        self.setPen(QtGui.QPen(QtGui.QColor('green'), 2))
-        self.setAcceptHoverEvents(True)
-        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
-        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
-        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
-        
-        self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
-        self.label = -1
-        self.top_left, self.bottom_right = None, None
-        self.top_left_item, self.bottom_right_item = None, None
-        
-        self.top_left_coords = QtWidgets.QGraphicsTextItem('', self)
-        self.top_left_coords.setDefaultTextColor(QtGui.QColor(0, 255, 0))
-        self.top_left_coords.setPos(0, 0)
-        self.top_left_coords.setFont(QtGui.QFont('Arial', 30, QtGui.QFont.Weight.Bold))
-        
-        self.bottom_right_coords = QtWidgets.QGraphicsTextItem('', self)
-        self.bottom_right_coords.setDefaultTextColor(QtGui.QColor(0, 255, 0))
-        self.bottom_right_coords.setPos(0, 0)
-        self.bottom_right_coords.setFont(QtGui.QFont('Arial', 30, QtGui.QFont.Weight.Bold))
-        
-        self.size_text =  QtWidgets.QGraphicsTextItem('', self)
-        self.size_text.setDefaultTextColor(QtGui.QColor(0, 0, 255))
-        self.size_text.setPos(0, 0)
-        self.size_text.setFont(QtGui.QFont('Arial', 30, QtGui.QFont.Weight.Bold))
-
-    @property
-    def points(self):
-        return [self.top_left.x(), self.top_left.y(), self.bottom_right.x(), self.bottom_right.y()]
-    
-    def setTopLeft(self, p):
-        self.top_left = self.mapFromScene(p)
-        self.top_left_item = GripItem(self, annotation_name='top_left')
-        self.scene().addItem(self.top_left_item)
-        self.top_left_item.setPos(p)
-        self.top_left_coords.setPlainText(f'{self.top_left.x(): .2f}, {self.top_left.y(): .2f}')
-        self.top_left_coords.setPos(p)
-    
-    def setBottomRight(self, p):
-        self.bottom_right = self.mapFromScene(p)
-        self.bottom_right_item = GripItem(self, annotation_name='bottom_right')
-        self.scene().addItem(self.bottom_right_item)
-        self.bottom_right_item.setPos(p)
-        self.bottom_right_coords.setPlainText(f'{self.bottom_right.x(): .2f}, {self.bottom_right.y(): .2f}')
-        self.bottom_right_coords.setPos(p)
-
-        tlx, tly, brx, bry = self.top_left.x(), self.top_left.y(), self.bottom_right.x(), self.bottom_right.y()
-        self.size_text.setPlainText(f'{(brx - tlx): .2f} X {(bry - tly): .2f}')
-        self.size_text.setPos((tlx + brx) // 2 - 50, (tly + bry) // 2)
-    
-    def movePoint(self, pos, name):
-        
-        if name == 'top_left' and self.top_left is not None:
-            self.top_left = self.mapFromScene(pos)
-            self.top_left_coords.setPlainText(f'{self.top_left.x(): .2f}, {self.top_left.y(): .2f}')
-            self.top_left_coords.setPos(self.top_left)   
-            if self.bottom_right is not None:
-                self.setRect(QtCore.QRectF(self.top_left, self.bottom_right))
-                 
-        elif name == 'bottom_right' and self.bottom_right is not None:
-            self.bottom_right = self.mapFromScene(pos)
-            self.setRect(QtCore.QRectF(self.top_left, self.bottom_right))
-            
-            self.bottom_right_coords.setPlainText(f'{self.bottom_right.x(): .2f}, {self.bottom_right.y(): .2f}')
-            self.bottom_right_coords.setPos(self.bottom_right)
-            
-        if self.top_left is not None and self.bottom_right is not None:
-            tlx, tly, brx, bry = self.top_left.x(), self.top_left.y(), self.bottom_right.x(), self.bottom_right.y()
-            self.size_text.setPlainText(f'{(brx - tlx): .2f} X {(bry - tly): .2f}')
-            self.size_text.setPos((tlx + brx) // 2 - 50, (tly + bry) // 2)
-            
-    def moveItem(self):
-        
-        self.top_left_item.setEnabled(False)
-        self.top_left_item.setPos(self.mapToScene(self.rect().topLeft()))
-        self.top_left_item.setEnabled(True)
-        self.bottom_right_item.setEnabled(False)
-        self.bottom_right_item.setPos(self.mapToScene(self.rect().bottomRight()))
-        self.bottom_right_item.setEnabled(True)
-        
-        self.top_left_coords.setPlainText(f'{self.top_left.x(): .2f}, {self.top_left.y(): .2f}')
-        self.bottom_right_coords.setPlainText(f'{self.bottom_right.x(): .2f}, {self.bottom_right.y(): .2f}')
-        
-        if self.top_left is not None and self.bottom_right is not None:
-            tlx, tly, brx, bry = self.top_left.x(), self.top_left.y(), self.bottom_right.x(), self.bottom_right.y()
-            self.size_text.setPlainText(f'{(brx - tlx): .2f} X {(bry - tly): .2f}')
-            self.size_text.setPos((tlx + brx) // 2 - 50, (tly + bry) // 2)
-
-    def setPoint(self, pos):
-        
-        if self.top_left is not None:
-            set_point = self.mapFromScene(pos)
-            if set_point.x() >= self.top_left.x() and set_point.y() >= set_point.y():
-                self.setRect(QtCore.QRectF(self.top_left, set_point))
-        
-            self.bottom_right_coords.setPlainText(f'{set_point.x(): .2f}, {set_point.y(): .2f}')
-            self.bottom_right_coords.setPos(pos)
-            
-            tlx, tly, brx, bry = self.top_left.x(), self.top_left.y(), set_point.x(), set_point.y()
-            self.size_text.setPlainText(f'{(brx - tlx): .2f} X {(bry - tly): .2f}')
-            self.size_text.setPos((tlx + brx) // 2  - 50, (tly + bry) // 2)
-                
-    def itemChange(self, change, value):
-        
-        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
-            self.moveItem()
-        return super(RectangleAnnotation, self).itemChange(change, value)        
-        
-    def hoverEnterEvent(self, event):
-        self.setBrush(QtGui.QColor(255, 0, 0, 100))
-        super(RectangleAnnotation, self).hoverEnterEvent(event)
-
-    def hoverLeaveEvent(self, event):
-        self.setBrush(QtGui.QBrush(QtCore.Qt.BrushStyle.NoBrush))
-        super(RectangleAnnotation, self).hoverLeaveEvent(event)
-
-
 class HomographyScene(QtWidgets.QGraphicsScene):
     
     def __init__(self, parent=None):
         
         super(HomographyScene, self).__init__(parent)
         
+        self.viewer = parent
+        self.set_default()
+    
+    def set_default(self):
         self.image_item = QtWidgets.QGraphicsPixmapItem()
         self.image_item.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.CrossCursor))
         self.current_instruction = Instructions.No_Instruction
         self.addItem(self.image_item)
         self.point_item = None
-        self.viewer = parent
         self.instruction = Instructions.No_Instruction
         self.current_mouse_coords = self.addText('', QtGui.QFont('Arial', 10, QtGui.QFont.Weight.Bold))
         self.current_mouse_coords.setDefaultTextColor(QtGui.QColor(255, 0, 0))
         self.current_mouse_coords.setPos(0, 0)
         self.point_items = defaultdict()
         self.point_id = 0
-
+    
     def load_image(self, filename):
+        
+        self.image_filename = filename
         self.image_item.setPixmap(QtGui.QPixmap(filename))
         self.setSceneRect(self.image_item.boundingRect())
     
@@ -253,11 +158,11 @@ class HomographyScene(QtWidgets.QGraphicsScene):
     def deleteLastPoint(self):
         
         if len(self.point_items.keys()) > 0:
+            self.point_id -= 1
             self.removeItem(self.point_items[self.point_id].point)
             self.removeItem(self.point_items[self.point_id])
             del self.point_items[self.point_id]
-            self.point_id -= 1
-    
+            
     def mousePressEvent(self, event):
         
         if self.current_instruction == Instructions.Point_Instruction:
@@ -267,10 +172,17 @@ class HomographyScene(QtWidgets.QGraphicsScene):
                 self.setCurrentInstruction(Instructions.No_Instruction)
         
         return super(HomographyScene, self).mousePressEvent(event)
-   
-    def savePoints(self):
-        pass
 
+    def returnPoints(self):
+        
+        coords = list()
+        for point_id in self.point_items:
+            
+            pts = self.point_items[point_id].points
+            coords.append(pts)
+        
+        return np.array(coords)
+    
     def mouseMoveEvent(self, event):
         
         self.current_mouse_coords.setPlainText(f'{event.scenePos().x(): .1f}, {event.scenePos().y(): .1f}')
@@ -278,96 +190,6 @@ class HomographyScene(QtWidgets.QGraphicsScene):
 
         super(HomographyScene, self).mouseMoveEvent(event)
         
-class AnnotationScene(QtWidgets.QGraphicsScene):
-    
-    def __init__(self, parent=None):
-        
-        super(AnnotationScene, self).__init__(parent)
-        
-        self.image_item = QtWidgets.QGraphicsPixmapItem()
-        self.image_item.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.CrossCursor))
-        self.addItem(self.image_item)
-        self.rectangle_item = None
-        self.file = 'roi.json'
-        self.current_instruction = Instructions.No_Instruction
-        self.current_mouse_coords = self.addText('', QtGui.QFont('Arial', 30, QtGui.QFont.Weight.Bold))
-        self.current_mouse_coords.setDefaultTextColor(QtGui.QColor(255, 0, 0))
-        self.current_mouse_coords.setPos(0, 0)
-        self.rectangle_items = list()
-        self.polygon_id = 0
-    
-    def load_image(self, filename):
-        self.image_item.setPixmap(QtGui.QPixmap(filename))
-        self.setSceneRect(self.image_item.boundingRect())
-     
-    def deleteLastRectangle(self):
-        
-        if len(self.rectangle_items) > 0:
-            
-            self.removeItem(self.rectangle_items[-1].top_left_item)
-            self.removeItem(self.rectangle_items[-1].bottom_right_item)
-            self.removeItem(self.rectangle_items[-1])
-            del self.rectangle_items[-1]
-            self.polygon_id -= 1
-    
-    def saveRectangle(self):
-        roi_dict = dict()
-        print(len(self.rectangle_items))
-        for i, rectangle_item in enumerate(self.rectangle_items):
-            roi_dict[i] = rectangle_item.points
-
-        with open(self.file, 'w') as f:
-            json.dump(roi_dict, f)
-
-    def setCurrentInstruction(self, instruction):
-        
-        if instruction == Instructions.No_Instruction and self.rectangle_item is not None:
-            self.rectangle_items.append(self.rectangle_item)
-            self.rectangle_item = None
-
-        self.current_instruction = instruction
-        
-        if instruction == Instructions.Rectangle_Instruction:
-            self.rectangle_item = RectangleAnnotation()
-            self.addItem(self.rectangle_item)
-            self.polygon_id += 1
-            
-    def mousePressEvent(self, event):
-        if self.current_instruction == Instructions.Rectangle_Instruction:
-            if self.rectangle_item.top_left is None or self.rectangle_item.bottom_right is None:
-                if self.rectangle_item.top_left is None:
-                    self.rectangle_item.setTopLeft(event.scenePos())
-                else:
-                    self.rectangle_item.setBottomRight(event.scenePos())
-                    
-        return super(AnnotationScene, self).mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        
-        if self.current_instruction == Instructions.No_Instruction:
-            self.current_mouse_coords.setPlainText(f'{event.scenePos().x(): .2f}, {event.scenePos().y(): .2f}')
-            self.current_mouse_coords.setPos(event.scenePos().x(), event.scenePos().y())
-        
-        if self.current_instruction == Instructions.Rectangle_Instruction:
-            
-            self.current_mouse_coords.setPlainText('')
-            self.current_mouse_coords.setPos(0, 0)
-            
-            if self.rectangle_item.top_left is None or self.rectangle_item.bottom_right is None:
-                self.rectangle_item.setPoint(event.scenePos())
-            
-        super(AnnotationScene, self).mouseMoveEvent(event)
-
-
-class AnnotationView(QtWidgets.QGraphicsView):
-
-    def __init__(self, parent=None):
-        super(AnnotationView, self).__init__(parent)
-        
-        self.setRenderHints(QtGui.QPainter.RenderHint.Antialiasing | QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        self.setMouseTracking(True)
-    
-
 class HomographyViewer(QtWidgets.QGraphicsView):
 
     rightMouseButtonPressed = pyqtSignal(float, float)
@@ -385,14 +207,14 @@ class HomographyViewer(QtWidgets.QGraphicsView):
         self.setScene(self.scene)
         
         self.fitInView(self.scene.image_item, Qt.AspectRatioMode.KeepAspectRatio)
-    
+   
     def updateViewer(self):
     
         if len(self.zoomStack) and self.sceneRect().contains(self.zoomStack[-1]):
-            self.fitInView(self.zoomStack[-1], Qt.AspectRatioMode.IgnoreAspectRatio)  # Show zoomed rect (ignore aspect ratio).
+            self.fitInView(self.zoomStack[-1], Qt.AspectRatioMode.IgnoreAspectRatio)
         else:
-            self.zoomStack = []  # Clear the zoom stack (in case we got here because of an invalid zoom).
-            self.fitInView(self.sceneRect(), self.aspectRatioMode)  # Show entire image (use current aspect ratio mode).
+            self.zoomStack = []
+            self.fitInView(self.sceneRect(), self.aspectRatioMode)
    
     def mousePressEvent(self, event):
         
@@ -405,17 +227,17 @@ class HomographyViewer(QtWidgets.QGraphicsView):
         
     def mouseReleaseEvent(self, event):
         
-        super(HomographyViewer, self).mouseReleaseEvent(event)
         if event.button() == Qt.MouseButton.RightButton:
             scenePos = self.mapToScene(event.pos())
             viewBBox = self.zoomStack[-1] if len(self.zoomStack) else self.sceneRect()
             selectionBBox = self.scene.selectionArea().boundingRect().intersected(viewBBox)
-            self.scene.setSelectionArea(QtGui.QPainterPath())  # Clear current selection area.
+            self.scene.setSelectionArea(QtGui.QPainterPath())
             if selectionBBox.isValid() and (selectionBBox != viewBBox):
                 self.zoomStack.append(selectionBBox)
                 self.updateViewer()
             self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
             self.rightMouseButtonReleased.emit(scenePos.x(), scenePos.y())
+        super(HomographyViewer, self).mouseReleaseEvent(event)
     
     def resizeEvent(self, event):
         self.updateViewer()
@@ -424,7 +246,7 @@ class HomographyViewer(QtWidgets.QGraphicsView):
         
         scenePos = self.mapToScene(event.pos())
         if event.button() == Qt.MouseButton.RightButton:
-            self.zoomStack = []  # Clear zoom stack.
+            self.zoomStack = []
             self.updateViewer()
             self.rightMouseButtonDoubleClicked.emit(scenePos.x(), scenePos.y())
         
@@ -437,17 +259,18 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.imagePlane = HomographyViewer(self)
         self.groundPlane = HomographyViewer(self)
 
-        self.imageLayout = QHBoxLayout()
+        self.imageLayout = QVBoxLayout()
         self.imageLayout.setContentsMargins(0, 0, 0, 0)
         self.imageLayout.addWidget(self.imagePlane)
         self.imageLayout.addWidget(self.groundPlane)
-
+        self.homdialog = ImagePopup(self)
+        self.homMatrix = None
+        self.filename = None
+        
         # Create Menus
         self.create_menus()
 
-        self.buttonMainLayout = QVBoxLayout()
-        
-        
+        self.mainLayout = QVBoxLayout()
         self.deleteLastPointButtonImage = QPushButton()
         self.deleteLastPointButtonImage.setText('Delete Last Point - Image Plane')
         self.deleteLastPointButtonImage.clicked.connect(partial(self.actionDeleteLastPoint, self.imagePlane))
@@ -456,26 +279,45 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.deleteLastPointButtonGround.setText('Delete Last Point - Ground Plane')
         self.deleteLastPointButtonGround.clicked.connect(partial(self.actionDeleteLastPoint, self.groundPlane))
         
-        self.saveRectangleButton = QPushButton()
-        self.saveRectangleButton.setText('Save Progress')
-        self.saveRectangleButton.clicked.connect(self.actionSaveProgress)
+        self.savePointsButton = QPushButton()
+        self.savePointsButton.setText('Save Progress')
+        self.savePointsButton.clicked.connect(self.actionSaveProgress)
+
+        self.homographyButton = QPushButton()
+        self.homographyButton.setText('Homography')
+        self.homographyButton.clicked.connect(self.actionHomography)
+        
+        self.reprojErrorButton = QPushButton()
+        self.reprojErrorButton.setText('Calculate Reprojection Error')
+        self.reprojErrorButton.clicked.connect(self.actionReprojError)
+        self.reprojErroLabel = QtWidgets.QLabel()
+        self.reprojErroLabel.setText('')
+        self.reprojErroLabelText = QtWidgets.QLabel()
+        self.reprojErroLabelText.setText('Homography error: ')
+        
 
         self.buttonLayout = QHBoxLayout()
         self.buttonLayout.setContentsMargins(0, 0, 0, 0)
-        self.buttonLayout.addWidget(self.deleteLastRectangleButton)
-        self.buttonLayout.addWidget(self.saveRectangleButton)
+        self.buttonLayout.addWidget(self.deleteLastPointButtonImage)
+        self.buttonLayout.addWidget(self.deleteLastPointButtonGround)
+        self.buttonLayout.addWidget(self.homographyButton)
+        self.buttonLayout.addWidget(self.savePointsButton)
+        self.buttonLayout.addWidget(self.reprojErrorButton)
+        self.buttonLayout.addWidget(self.reprojErroLabelText)
+        self.buttonLayout.addWidget(self.reprojErroLabel)
         
         self.mainLayout = QVBoxLayout()
         self.mainLayout.addLayout(self.imageLayout)
         self.mainLayout.addLayout(self.buttonLayout)
         
-        QtGui.QShortcut(QtCore.Qt.Key.Key_T, self, activated=partial(self.m_scene.setCurrentInstruction, Instructions.Point_Instruction))
-        QtGui.QShortcut(QtCore.Qt.Key.Key_Escape, self, activated=partial(self.m_scene.setCurrentInstruction, Instructions.No_Instruction))
-
+        QtGui.QShortcut(QtCore.Qt.Key.Key_I, self, activated=partial(self.imagePlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
+        QtGui.QShortcut(QtCore.Qt.Key.Key_G, self, activated=partial(self.groundPlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
+        QtGui.QShortcut(QtCore.Qt.Key.Key_C, self, activated=self.actionResetAll)
+        QtGui.QShortcut(QtCore.Qt.Key.Key_S, self, activated=self.actionSaveProgress)
+        
         wid = QWidget()
         self.setCentralWidget(wid)
         wid.setLayout(self.mainLayout)
-        
         
     def actionDeleteLastPoint(self, view):
         
@@ -483,34 +325,91 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
     def actionSaveProgress(self):
         
-        self.m_scene.saveRectangle()
+        image_points = self.imagePlane.scene.returnPoints()
+        ground_points = self.groundPlane.scene.returnPoints()
+        name = os.path.splitext(os.path.basename(self.imagePlane.scene.filename))[0]
+        np.savetxt(name + '_image_points.txt', image_points, fmt='%d', delimiter=' ')
+        np.savetxt(name + '_ground_points.txt', ground_points, fmt='%d', delimiter=' ')
+        if self.homMatrix is not None:
+            np.savetxt(name + '_homography.txt', self.homMatrix, fmt='%.5f', delimeter=' ')
+    
+    def actionResetAll(self):
+        
+        # First save the progress and delete everything
+        self.actionSaveProgress()
+        
+        while self.imagePlane.scene.point_id > 0:
+            self.imagePlane.scene.deleteLastPoint()
+        
+        while self.groundPlane.scene.point_id > 0:
+            self.groundPlane.scene.deleteLastPoint()
+        
+        self.imagePlane.scene.clear()
+        self.imagePlane.scene.set_default()
+        self.groundPlane.scene.clear()
+        self.groundPlane.scene.set_default()
+    
+        self.homMatrix = None
+        self.reprojErroLabel.setText('')
+        self.filename = None
+    
+    def actionReprojError(self):
+        
+        if self.homMatrix is not None:
+            image_points = self.imagePlane.scene.returnPoints()
+            ground_points = self.imagePlane.scene.returnPoints()
+            himage_points = np.hstack((image_points, np.ones((image_points.shape[0], 1))))
+            timage_points = himage_points @ self.homMatrix.T
+            timage_points = timage_points[:, :2] / timage_points[:, [2]]
+            errors = np.linalg.norm(timage_points - ground_points, axis=1)
+            rmse = np.sqrt(np.mean(errors ** 2))
+            self.reprojErroLabel.setText('%.2f' % rmse)
+        else:
+            self.reprojErroLabel.setText('ERROR!')
 
+    def actionHomography(self):
+        
+        image_points = self.imagePlane.scene.returnPoints()
+        ground_points = self.groundPlane.scene.returnPoints()
+        cv2hom = cv2.findHomography(image_points, ground_points)[0]
+        self.homMatrix = cv2hom
+        
+        cv_image, cv_ground = cv2.imread(self.imagePlane.scene.image_filename), cv2.imread(self.groundPlane.scene.image_filename)
+        warped_image = cv2.warpPerspective(cv_image, cv2hom, (cv_ground.shape[1], cv_ground.shape[0]))
+        alpha = 0.7
+        beta = (1.0 - alpha)
+        result = cv2.addWeighted(warped_image, alpha, cv_ground, beta, 0.0)
+        self.homdialog.setImage(result)
+        self.homdialog.show()   
+    
     def create_menus(self):
+        
         menu_file = self.menuBar().addMenu("File")
-        load_image_action = menu_file.addAction("&Load Image")
-        load_image_action.triggered.connect(self.load_image)
-
+        load_image_action = menu_file.addAction("&Load Image Plane Image")
+        load_ground_action = menu_file.addAction("&Load Ground Plane Image")
+        
+        load_image_action.triggered.connect(partial(self.load_image, self.imagePlane))
+        load_ground_action.triggered.connect(partial(self.load_image, self.groundPlane))
+        
         menu_instructions = self.menuBar().addMenu("Intructions")
-        polygon_action = menu_instructions.addAction("Point")
-        polygon_action.triggered.connect(partial(self.m_scene.setCurrentInstruction, Instructions.Point_Instruction))
-
+        polygon_action1 = menu_instructions.addAction("Point - Image Plane")
+        polygon_action2 = menu_instructions.addAction("Point - Ground Plane")
+        
+        polygon_action1.triggered.connect(partial(self.imagePlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
+        polygon_action2.triggered.connect(partial(self.groundPlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
+        
     @QtCore.pyqtSlot()
-    def load_image(self):
+    def load_image(self, view):
         filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 
             "Open Image",
             QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.StandardLocation.PicturesLocation), #QtCore.QDir.currentPath(), 
             "Image Files (*.png *.jpg *.bmp)")
         
         if filename:
-            self.m_scene.load_image(filename)
-            self.m_view.fitInView(self.m_scene.image_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
-            self.m_view.centerOn(self.m_scene.image_item)
-
-# Make annotation viewer
-
-
-
-
+            self.filename = filename
+            view.scene.load_image(filename)
+            view.fitInView(view.scene.image_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            view.centerOn(view.scene.image_item)
 
 if __name__ == '__main__':
     import sys

@@ -471,7 +471,7 @@ class VideoCountingAnnotation(QMainWindow):
     def actionLockLanes(self):
         
         self.lanesLocked = not self.lanesLocked
-        print(self.lanesLocked)
+
         if self.lanesLocked:
             self.lockLanesButton.setText('Unlock Lanes')
         else:
