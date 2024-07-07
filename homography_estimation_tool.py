@@ -25,15 +25,21 @@ class ImagePopup(QtWidgets.QDialog):
         super().__init__(parent)
         
         self.setWindowTitle('Homography Image')
-        self.label = QtWidgets.QLabel(self)
+        self.label_warped = QtWidgets.QLabel(self)
+        self.label_reprojected = QtWidgets.QLabel(self)
         self.layout = QVBoxLayout()
-        self.layout.addWidget(self.label)
+        self.layout.addWidget(self.label_warped)
+        self.layout.addWidget(self.label_reprojected)
         self.setLayout(self.layout)
         self.adjustSize()
     
-    def setImage(self, img):
+    def setImage(self, img, reproject=False):
+        
         pix_img = convert_cv_qt(img)
-        self.label.setPixmap(pix_img)
+        if reproject:
+            self.label_reprojected.setPixmap(pix_img)
+        else:
+            self.label_warped.setPixmap(pix_img)
         
 class GripItem(QtWidgets.QGraphicsPathItem):
     
@@ -361,33 +367,48 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         if self.homMatrix is not None:
             image_points = self.imagePlane.scene.returnPoints()
             ground_points = self.groundPlane.scene.returnPoints()
-            himage_points = np.hstack((image_points, np.ones((image_points.shape[0], 1))))
-            timage_points = himage_points @ self.homMatrix.T
+            timage_points = self.getReprojectedPoints(image_points)
             
-            timage_points = timage_points[:, :2] / timage_points[:, [2]]
             errors = np.linalg.norm(timage_points - ground_points, axis=1)
             rmse = np.sqrt(np.mean(errors ** 2))
             self.reprojErroLabel.setText('%.2f' % rmse)
         else:
             self.reprojErroLabel.setText('ERROR!')
 
+    def getHomographyMatrix(self, image_points, ground_points):
+        
+        cv2hom = cv2.findHomography(image_points, ground_points)[0]
+        self.homMatrix = cv2hom
+    
+    def getReprojectedPoints(self, image_points):
+        
+        himage_points = np.hstack((image_points, np.ones((image_points.shape[0], 1))))
+        timage_points = himage_points @ self.homMatrix.T    
+        timage_points = timage_points[:, :2] / timage_points[:, [2]]
+        return timage_points
+    
     def actionHomography(self):
         
         image_points = self.imagePlane.scene.returnPoints()
         ground_points = self.groundPlane.scene.returnPoints()
-        sx = self.imagePlane.scene.image_width / self.groundPlane.scene.image_width 
-        sy = self.imagePlane.scene.image_height / self.groundPlane.scene.image_height
         
-        cv2hom = cv2.findHomography(image_points, ground_points)[0]
-        self.homMatrix = cv2hom
-        
-        cv_image, cv_ground = cv2.imread(self.imagePlane.scene.image_filename), cv2.imread(self.groundPlane.scene.image_filename)
-        warped_image = cv2.warpPerspective(cv_image, cv2hom, (cv_ground.shape[1], cv_ground.shape[0]))
-        alpha = 0.7
-        beta = (1.0 - alpha)
-        result = cv2.addWeighted(warped_image, alpha, cv_ground, beta, 0.0)
-        self.homdialog.setImage(result)
-        self.homdialog.show()
+        if (image_points.shape[0] >= 4 and ground_points.shape[0] >= 4) and (image_points.shape[0] == ground_points.shape[0]):
+            self.getHomographyMatrix(image_points, ground_points)
+            cv_image, cv_ground = cv2.imread(self.imagePlane.scene.image_filename), cv2.imread(self.groundPlane.scene.image_filename)
+            reprojected_points = self.getReprojectedPoints(image_points)
+            
+            warped_image = cv2.warpPerspective(cv_image, self.homMatrix, (cv_ground.shape[1], cv_ground.shape[0]))
+            alpha = 0.7
+            beta = (1.0 - alpha)
+            result = cv2.addWeighted(warped_image, alpha, cv_ground, beta, 0.0)
+            self.homdialog.setImage(result)
+            for p, rp in zip(ground_points.astype(int), reprojected_points.astype(int)):
+                cv_ground = cv2.circle(cv_ground, p, 2, (0, 255, 0), 2)
+                cv_ground = cv2.circle(cv_ground, rp, 2, (0, 0, 255), 2)
+            
+            self.homdialog.setImage(cv_ground, reproject=True)
+            
+            self.homdialog.show()
     
     def create_menus(self):
         
