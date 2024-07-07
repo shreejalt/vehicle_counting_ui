@@ -331,10 +331,10 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         image_points = self.imagePlane.scene.returnPoints()
         ground_points = self.groundPlane.scene.returnPoints()
         name = os.path.splitext(os.path.basename(self.filename))[0]
-        np.savetxt(name + '_image_points.txt', image_points, fmt='%d', delimiter=' ')
-        np.savetxt(name + '_ground_points.txt', ground_points, fmt='%d', delimiter=' ')
+        np.savetxt(name + '_image_points.txt', image_points, fmt='%d')
+        np.savetxt(name + '_ground_points.txt', ground_points, fmt='%d')
         if self.homMatrix is not None:
-            np.savetxt(name + '_homography.txt', self.homMatrix, fmt='%.5f', delimeter=' ')
+            np.savetxt(name + '_homography.txt', self.homMatrix, fmt='%.5f')
     
     def actionResetAll(self):
         
@@ -365,7 +365,6 @@ class AnnotationWindow(QtWidgets.QMainWindow):
             timage_points = himage_points @ self.homMatrix.T
             
             timage_points = timage_points[:, :2] / timage_points[:, [2]]
-            print(timage_points, ground_points)
             errors = np.linalg.norm(timage_points - ground_points, axis=1)
             rmse = np.sqrt(np.mean(errors ** 2))
             self.reprojErroLabel.setText('%.2f' % rmse)
@@ -388,7 +387,7 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         beta = (1.0 - alpha)
         result = cv2.addWeighted(warped_image, alpha, cv_ground, beta, 0.0)
         self.homdialog.setImage(result)
-        self.homdialog.show()   
+        self.homdialog.show()
     
     def create_menus(self):
         
@@ -405,7 +404,7 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
         polygon_action1.triggered.connect(partial(self.imagePlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
         polygon_action2.triggered.connect(partial(self.groundPlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
-        
+    
     @QtCore.pyqtSlot()
     def load_image(self, view):
         filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 
