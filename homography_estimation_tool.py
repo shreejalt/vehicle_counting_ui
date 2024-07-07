@@ -136,12 +136,15 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         self.current_mouse_coords.setPos(0, 0)
         self.point_items = defaultdict()
         self.point_id = 0
+        self.image_width, self.image_height = None, None
     
     def load_image(self, filename):
         
         self.image_filename = filename
         self.image_item.setPixmap(QtGui.QPixmap(filename))
         self.setSceneRect(self.image_item.boundingRect())
+        
+        self.image_height, self.image_width = self.height(), self.width()
     
     def setCurrentInstruction(self, instruction):
         
@@ -327,7 +330,7 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
         image_points = self.imagePlane.scene.returnPoints()
         ground_points = self.groundPlane.scene.returnPoints()
-        name = os.path.splitext(os.path.basename(self.imagePlane.scene.filename))[0]
+        name = os.path.splitext(os.path.basename(self.filename))[0]
         np.savetxt(name + '_image_points.txt', image_points, fmt='%d', delimiter=' ')
         np.savetxt(name + '_ground_points.txt', ground_points, fmt='%d', delimiter=' ')
         if self.homMatrix is not None:
@@ -357,10 +360,12 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
         if self.homMatrix is not None:
             image_points = self.imagePlane.scene.returnPoints()
-            ground_points = self.imagePlane.scene.returnPoints()
+            ground_points = self.groundPlane.scene.returnPoints()
             himage_points = np.hstack((image_points, np.ones((image_points.shape[0], 1))))
             timage_points = himage_points @ self.homMatrix.T
+            
             timage_points = timage_points[:, :2] / timage_points[:, [2]]
+            print(timage_points, ground_points)
             errors = np.linalg.norm(timage_points - ground_points, axis=1)
             rmse = np.sqrt(np.mean(errors ** 2))
             self.reprojErroLabel.setText('%.2f' % rmse)
@@ -371,6 +376,9 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
         image_points = self.imagePlane.scene.returnPoints()
         ground_points = self.groundPlane.scene.returnPoints()
+        sx = self.imagePlane.scene.image_width / self.groundPlane.scene.image_width 
+        sy = self.imagePlane.scene.image_height / self.groundPlane.scene.image_height
+        
         cv2hom = cv2.findHomography(image_points, ground_points)[0]
         self.homMatrix = cv2hom
         
@@ -406,10 +414,12 @@ class AnnotationWindow(QtWidgets.QMainWindow):
             "Image Files (*.png *.jpg *.bmp)")
         
         if filename:
-            self.filename = filename
             view.scene.load_image(filename)
             view.fitInView(view.scene.image_item, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
             view.centerOn(view.scene.image_item)
+            
+        if view ==  self.imagePlane:
+            self.filename = filename    
 
 if __name__ == '__main__':
     import sys
