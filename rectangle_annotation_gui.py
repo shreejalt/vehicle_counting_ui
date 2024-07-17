@@ -1,7 +1,7 @@
 from enum import Enum
 from functools import partial
 from PyQt6 import QtWidgets, QtGui, QtCore
-
+QtGui.QImageReader.setAllocationLimit(0)
 from PyQt6.QtWidgets import (QHBoxLayout, QPushButton, QVBoxLayout, QWidget)
 import json
 
@@ -220,7 +220,6 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         with open(self.file, 'w') as f:
             json.dump(roi_dict, f)
 
-
     def setCurrentInstruction(self, instruction):
         
         if instruction == Instructions.No_Instruction and self.rectangle_item is not None:
@@ -323,7 +322,7 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 
             "Open Image",
             QtCore.QStandardPaths.writableLocation(QtCore.QStandardPaths.StandardLocation.PicturesLocation), #QtCore.QDir.currentPath(), 
-            "Image Files (*.png *.jpg *.bmp)")
+            "Image Files (*.png *.jpg *.bmp *.tif)")
         
         if filename:
             self.m_scene.load_image(filename)

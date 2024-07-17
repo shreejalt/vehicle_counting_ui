@@ -94,7 +94,7 @@ class GoogleMapDownloader:
         for x in range(-tile_width//2, tile_width//2):
             for y in range(-tile_height//2, tile_height//2):
                 url = f'https://mt0.google.com/vt?lyrs={self._layer}&x=' + str(start_x + x) + \
-                       '&y=' + str(start_y + y) + '&z=' + str(self._zoom)
+                       '&y=' + str(start_y + y) + '&z=' + str(self._zoom) + '&s=Ga'
                 current_tile = str(x) + '-' + str(y)
                 response = requests.get(url, stream=True)
                 with open(current_tile, 'wb') as out_file: shutil.copyfileobj(response.raw, out_file)
