@@ -4,7 +4,7 @@ from functools import partial
 from PyQt6 import QtWidgets, QtGui, QtCore, QtMultimedia, QtMultimediaWidgets
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtCore import QDir, Qt, QUrl, QSizeF, QPointF
+from PyQt6.QtCore import QDir, Qt, QUrl, QPointF
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
         QPushButton, QSizePolicy, QSlider, QComboBox, QStyle, QVBoxLayout, QWidget, QMainWindow, QListWidget)
@@ -14,6 +14,7 @@ import json
 import os
 
 # Point graphics class. Can move and hover around
+
 class GripItem(QtWidgets.QGraphicsPathItem):
     circle = QtGui.QPainterPath()
     circle.addEllipse(QtCore.QRectF(-10, -10, 20, 20))
@@ -44,7 +45,8 @@ class GripItem(QtWidgets.QGraphicsPathItem):
         self.setPath(GripItem.circle)
         self.setBrush(QtGui.QColor("green"))
         super(GripItem, self).hoverLeaveEvent(event)
-
+        
+    
     def mouseReleaseEvent(self, event):
         self.setSelected(False)
         super(GripItem, self).mouseReleaseEvent(event)
@@ -176,7 +178,6 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         self.player = QtMultimedia.QMediaPlayer()
         self.video_item = QtMultimediaWidgets.QGraphicsVideoItem()
         self.video_item.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.CrossCursor))
-        self.video_item.setSize(QSizeF(2560, 1440))
         self.player.setVideoOutput(self.video_item)
         self.addItem(self.video_item)
         
@@ -211,8 +212,8 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
                 self.num_polygons += 1
                 
                 points = np.array(rois[key]['roi'])
-                points[:, 0] *= 2560
-                points[:, 1] *= 1440
+                points[:, 0] *= self.video_item.size().width()
+                points[:, 1] *= self.video_item.size().height()
                 for point in points:
                     self.polygon_item.removeLastPoint()
                     self.polygon_item.addPoint(QPointF(point[0], point[1]))
@@ -446,7 +447,6 @@ class VideoCountingAnnotation(QMainWindow):
         self.buttonVerticalLayout.addLayout(self.buttonSubLayout1)
         self.buttonVerticalLayout.addLayout(self.buttonSubLayout2)
 
-        
         controlLayout = QHBoxLayout()
         controlLayout.addWidget(self.playButton)
         controlLayout.addWidget(self.positionSlider)
@@ -753,6 +753,7 @@ if __name__ == '__main__':
     
     app = QApplication(sys.argv)
     player = VideoCountingAnnotation()
+    
     player.resize(1920, 1080)
     player.show()
     sys.exit(app.exec())

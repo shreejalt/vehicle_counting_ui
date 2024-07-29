@@ -26,6 +26,7 @@ def convert_cv_qt(cv_img, rgb=False):
         
     h, w, ch = rgb_image.shape
     bytes_per_line = ch * w
+
     convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format.Format_RGB888)
     p = convert_to_Qt_format.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio)
     return QtGui.QPixmap.fromImage(p)
@@ -37,6 +38,7 @@ def pixel_to_utm(px, transform_matrix):
 class Instructions(Enum):
     No_Instruction = 0
     Point_Instruction = 1
+    Polygon_Instruction = 2
 
 class ImagePopup(QtWidgets.QDialog):
     def __init__(self, parent):
@@ -64,8 +66,8 @@ class GripItem(QtWidgets.QGraphicsPathItem):
     circle = QtGui.QPainterPath()
     circle.addEllipse(QtCore.QRectF(-10, -10, 20, 20))
     square = QtGui.QPainterPath()
-    square.addRect(QtCore.QRectF(-15, -15, 30, 30))
     
+    square.addRect(QtCore.QRectF(-15, -15, 30, 30)) 
     def __init__(self, annotation_item, id=0):
         super(GripItem, self).__init__()
         
@@ -99,7 +101,7 @@ class GripItem(QtWidgets.QGraphicsPathItem):
         
     def itemChange(self, change, value):
         if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged and self.isEnabled():
-            self.annotation_item.movePoint(value, self.id)
+            self.annotation_item.movePoint(self.id, value)
         return super(GripItem, self).itemChange(change, value)
 
 class PointAnnotation(QtWidgets.QGraphicsItem):
@@ -142,13 +144,109 @@ class PointAnnotation(QtWidgets.QGraphicsItem):
         self.coords.setPlainText(f'ID: {id}')
         self.coords.setPos(self.c)
 
-    def movePoint(self, pos, id):
+    def movePoint(self, id, pos):
             
         self.c = self.mapFromScene(pos)
         self.point.setPos(self.c)
         self.coords.setPos(self.c)
         self.coords.setPlainText(f'ID: {id}')
 
+class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
+    
+    def __init__(self, parent=None, calling_class=None):
+        super(PolygonAnnotation, self).__init__(parent)
+        
+        self.setZValue(10)
+        self.setPen(QtGui.QPen(QtGui.QColor("green"), 2))
+        self.setAcceptHoverEvents(True)
+
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+                
+        self.items = []
+        self.points = []
+        self.label = ''
+        self.calling_class = calling_class
+        self.id = QtWidgets.QGraphicsTextItem('', self)
+        self.id.setDefaultTextColor(QtGui.QColor(0, 255, 0))
+        self.id.setPos(0, 0)
+        self.id.setFont(QtGui.QFont('Arial', 20, QtGui.QFont.Weight.Bold))
+        
+    def numPoints(self):
+        return len(self.items)
+    
+    @property
+    def polypoints(self):
+        
+        points = np.empty(shape=(0, 2))
+        for point in self.points:
+            p = (point.x(), point.y())
+            points = np.vstack((points, p))
+        return points
+
+    def getPoints(self):
+        
+        points = np.empty(shape=(0, 2))
+        for point in self.points:
+            p = (point.x(), point.y())
+            points = np.vstack((points, p))
+        mean = np.mean(points, axis=0)
+        return mean
+    
+    def moveLabel(self):
+        
+        mean_pos = self.getPoints()
+        self.id.setPos(QtCore.QPointF(mean_pos[0], mean_pos[1]))
+        self.id.setPlainText(str(int(self.label) + 1))
+
+    def addPoint(self, p):
+        self.points.append(p)
+        self.setPolygon(QtGui.QPolygonF(self.points))
+        item = GripItem(self, len(self.points) - 1)
+        self.scene().addItem(item)
+        self.items.append(item)
+        item.setPos(p)
+        
+    def removeLastPoint(self):
+        if self.points:
+            self.points.pop()
+            self.setPolygon(QtGui.QPolygonF(self.points))
+            it = self.items.pop()
+            self.scene().removeItem(it)
+            del it
+        
+    def movePoint(self, i, p):
+        if 0 <= i < len(self.points):
+            self.points[i] = self.mapFromScene(p)
+            self.setPolygon(QtGui.QPolygonF(self.points))
+            self.moveLabel()
+
+    def move_item(self, index, pos):
+        if 0 <= index < len(self.items):
+            item = self.items[index]
+            item.setEnabled(False)
+            item.setPos(pos)
+            item.setEnabled(True)
+
+    def itemChange(self, change, value):
+        
+        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            for i, point in enumerate(self.points):
+                self.move_item(i, self.mapToScene(point))
+            self.moveLabel()
+            
+        return super(PolygonAnnotation, self).itemChange(change, value)
+    
+    def hoverEnterEvent(self, event):
+        self.setBrush(QtGui.QColor(255, 0, 0, 100))
+        super(PolygonAnnotation, self).hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.setBrush(QtGui.QBrush(QtCore.Qt.BrushStyle.NoBrush))
+        super(PolygonAnnotation, self).hoverLeaveEvent(event)
+ 
 class HomographyScene(QtWidgets.QGraphicsScene):
     
     def __init__(self, parent=None, is_ground_plane=False, show_utm=False):
@@ -176,11 +274,17 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         self.player.setVideoOutput(self.video_item)
         
         self.point_item = None
+        self.polygon_item = None
         self.instruction = Instructions.No_Instruction
         self.current_mouse_coords = None
        
         self.point_items = defaultdict()
+        self.polygon_items = defaultdict()
+        self.reprojected_polygons = defaultdict()
+        
         self.point_id = 0
+        self.polygon_id = 0
+        self.reprojected_polygon_id = 0
         self.image_width, self.image_height = None, None
         self.orthophoto_set = False
         self.utm = False
@@ -197,6 +301,26 @@ class HomographyScene(QtWidgets.QGraphicsScene):
             self.point_id += 1
             self.point_item = None
     
+    def make_polygon(self, points):
+        
+        if not self.is_ground_plane and self.viewer.homMatrix is not None and self.viewer.imagePlane.scene.file_loaded:
+            
+            if self.viewer.imagePlane.scene.reprojected_polygon_id not in self.reprojected_polygons:
+                polygon = PolygonAnnotation(calling_class=self)
+                polygon.label = self.viewer.imagePlane.scene.reprojected_polygon_id
+                self.reprojected_polygons[self.viewer.imagePlane.scene.reprojected_polygon_id] = polygon
+                self.addItem(polygon)
+            
+            reprojected_points = self.viewer.getReReprojectedPoints(points)
+
+            for p in reprojected_points:
+                self.reprojected_polygons[self.viewer.imagePlane.scene.reprojected_polygon_id].removeLastPoint()
+                self.reprojected_polygons[self.viewer.imagePlane.scene.reprojected_polygon_id].addPoint(QtCore.QPointF(p[0], p[1]))
+                self.reprojected_polygons[self.viewer.imagePlane.scene.reprojected_polygon_id].addPoint(QtCore.QPointF(p[0], p[1]))
+            
+            self.reprojected_polygons[self.viewer.imagePlane.scene.reprojected_polygon_id].removeLastPoint()
+            self.reprojected_polygons[self.viewer.imagePlane.scene.reprojected_polygon_id].moveLabel()
+
     def load_utm_points(self, points):
         
         for point_id in self.point_items.keys():
@@ -245,12 +369,25 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         if instruction == Instructions.No_Instruction and self.point_item is not None:
             self.point_items[self.point_id - 1] = self.point_item
             self.point_item = None
-
-        self.current_instruction = instruction
-        if instruction == Instructions.Point_Instruction and self.point_item is None:
+        
+        elif instruction == Instructions.Point_Instruction and self.point_item is None:
             self.point_item = PointAnnotation()
             self.addItem(self.point_item)
             self.point_id += 1
+        elif instruction == Instructions.Polygon_Instruction and self.polygon_item is None:
+            self.polygon_item = PolygonAnnotation(calling_class=self)
+            self.addItem(self.polygon_item)
+            self.polygon_item.label = self.polygon_id
+            self.polygon_id += 1
+            
+        elif instruction == Instructions.No_Instruction and self.polygon_item is not None:
+            self.polygon_item.removeLastPoint()
+            self.polygon_items[self.polygon_id - 1] = self.polygon_item
+            self.polygon_item.moveLabel()
+            self.polygon_item = None
+            self.viewer.imagePlane.scene.reprojected_polygon_id += 1
+            
+        self.current_instruction = instruction
     
     def deleteLastPoint(self):
         
@@ -259,12 +396,19 @@ class HomographyScene(QtWidgets.QGraphicsScene):
             self.removeItem(self.point_items[self.point_id].point)
             self.removeItem(self.point_items[self.point_id])
             del self.point_items[self.point_id]
+
+    def deleteLastPolygon(self):
+            if len(self.polygon_items.keys()) > 0:
+                self.polygon_id -= 1
+                for item in self.polygon_items[self.polygon_id].items:
+                    self.removeItem(item)
+                self.removeItem(self.polygon_items[self.polygon_id])
+                del self.polygon_items[self.polygon_id]
             
     def mousePressEvent(self, event):
         
-        if self.current_instruction == Instructions.Point_Instruction:
+        if self.current_instruction == Instructions.Point_Instruction and event.button() == Qt.MouseButton.LeftButton:
             if self.point_item.point is None:
-                
                 self.point_item.setPoint(event.scenePos(), self.point_id - 1)
                 self.point_item.set = True
                 if self.utm:
@@ -273,7 +417,22 @@ class HomographyScene(QtWidgets.QGraphicsScene):
                     elevation = self.elevation_map[y, x]
                     self.point_item.utm_coords = [utm_x, utm_y, elevation]
                 self.setCurrentInstruction(Instructions.No_Instruction)
-        
+        elif self.current_instruction == Instructions.Polygon_Instruction and event.button() == Qt.MouseButton.LeftButton:
+           
+            # Hide all the point items when polygon instruction is set
+            
+            for point_id in self.point_items:
+                self.point_items[point_id].point.hide()
+                self.point_items[point_id].coords.hide()
+                self.viewer.imagePlane.scene.point_items[point_id].point.hide()
+                self.viewer.imagePlane.scene.point_items[point_id].coords.hide()
+                
+                
+            if self.polygon_item is not None:
+                self.polygon_item.removeLastPoint()
+                self.polygon_item.addPoint(event.scenePos())
+                self.polygon_item.addPoint(event.scenePos())
+
         return super(HomographyScene, self).mousePressEvent(event)
 
     def returnPoints(self):
@@ -307,6 +466,11 @@ class HomographyScene(QtWidgets.QGraphicsScene):
             
             self.current_mouse_coords.setPlainText(f'{set_x: .1f}, {set_y: .1f}')
             self.current_mouse_coords.setPos(int(event.scenePos().x()), int(event.scenePos().y()))
+        
+        if self.current_instruction == Instructions.Polygon_Instruction:
+            self.polygon_item.movePoint(self.polygon_item.numPoints() - 1, event.scenePos())
+            if self.is_ground_plane:
+                self.viewer.imagePlane.scene.make_polygon(self.polygon_item.polypoints)
 
         super(HomographyScene, self).mouseMoveEvent(event)
         
@@ -378,6 +542,9 @@ class AnnotationWindow(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         super(AnnotationWindow, self).__init__(parent)
 
+
+        self.setWindowTitle('Homography Estimation Tool')
+        
         self.imagePlane = HomographyViewer(self)
         self.groundPlane = HomographyViewer(self, is_ground_plane=True, show_utm=True)
 
@@ -405,8 +572,11 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.deleteLastPointButtonGround = QPushButton()
         self.deleteLastPointButtonGround.setText('Delete Last Point - Ground Plane')
         self.deleteLastPointButtonGround.clicked.connect(partial(self.actionDeleteLastPoint, self.groundPlane))
+        self.deleteLastPolygonButton = QPushButton()
+        self.deleteLastPolygonButton.setText('Delete Last Polygon') 
+        self.deleteLastPolygonButton.clicked.connect(partial(self.actionDeleteLastPolygon, self.groundPlane))
         
-        self.savePointsButton = QPushButton()
+        self.savePointsButton = QPushButton() 
         self.savePointsButton.setText('Save Progress')
         self.savePointsButton.clicked.connect(self.actionSaveProgress)
 
@@ -417,7 +587,6 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.calibrationButton = QPushButton()
         self.calibrationButton.setText('Calibrate Camera')
         self.calibrationButton.clicked.connect(self.actionCalibrateCamera)
-        
         
         self.reprojErrorButton = QPushButton()
         self.reprojErrorButton.setText('Calculate Reprojection Error')
@@ -441,6 +610,7 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.buttonLayout.setContentsMargins(0, 0, 0, 0)
         self.buttonLayout.addWidget(self.deleteLastPointButtonImage)
         self.buttonLayout.addWidget(self.deleteLastPointButtonGround)
+        self.buttonLayout.addWidget(self.deleteLastPolygonButton)
         self.buttonLayout.addWidget(self.homographyButton)
         self.buttonLayout.addWidget(self.savePointsButton)
         self.buttonLayout.addWidget(self.reprojErrorButton)
@@ -458,6 +628,11 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
         QtGui.QShortcut(QtCore.Qt.Key.Key_I, self, activated=partial(self.imagePlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
         QtGui.QShortcut(QtCore.Qt.Key.Key_G, self, activated=partial(self.groundPlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
+        
+        # Make the pairs for the Ground Plane to draw the polygons
+        QtGui.QShortcut(QtCore.Qt.Key.Key_P, self, activated=partial(self.groundPlane.scene.setCurrentInstruction, Instructions.Polygon_Instruction))
+        QtGui.QShortcut(QtCore.Qt.Key.Key_Escape, self, activated=partial(self.groundPlane.scene.setCurrentInstruction, Instructions.No_Instruction))
+        
         QtGui.QShortcut(QtCore.Qt.Key.Key_C, self, activated=self.actionResetAll)
         QtGui.QShortcut(QtCore.Qt.Key.Key_S, self, activated=self.actionSaveProgress)
         
@@ -469,45 +644,50 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
         view.scene.deleteLastPoint()
     
+    def actionDeleteLastPolygon(self, view):
+        view.scene.deleteLastPolygon()
+    
     def actionCalibrateCamera(self):
-        
-        if len(self.imagePlane.scene.point_items.keys()) and len(self.groundPlane.scene.point_items.keys()) and self.groundPlane.scene.utm:
-            image_points = self.imagePlane.scene.returnPoints()
-            if self.groundPlane.scene.utm:
-                georef_points = self.groundPlane.scene.returnUTMPoints()
-            
-            imagePoints_mat = matlab.double(image_points.tolist())
-            worldPoints_mat = matlab.double(georef_points.tolist())
-            cameraIntrinsics = eng.eval("cameraParams.Intrinsics", nargout=1)
-            eng.workspace["worldPoints_mat"] = worldPoints_mat
-            eng.workspace["worldPose"] = eng.estworldpose(
-                imagePoints_mat,
-                worldPoints_mat,
-                cameraIntrinsics,
-                "MaxNumTrials",
-                matlab.single(2000),
-                "Confidence",
-                matlab.single(98),
-                "MaxReprojectionError",
-                matlab.single(2),
-                nargout=1
-            )
-            eng.eval(f"""
-                     pcshow(worldPoints_mat, VerticalAxis="Y", VerticalAxisDir="down", MarkerSize=30);
-                     hold on
-                     plotCamera(Size=10, Orientation=worldPose.R', Location=worldPose.Translation);
-                     hold off
-                     """, nargout=0)
-            K, R, t = np.array(eng.eval("cameraParams.Intrinsics.K")), np.array(eng.eval("worldPose.R")), np.array(eng.eval("worldPose.Translation")).reshape((3, 1))
-            
-            name = os.path.splitext(os.path.basename(self.filename))[0]
-            if not os.path.exists(name):
-                os.makedirs(name)
-            
-            np.savetxt(os.path.join(name, name + '_K.txt'), K, fmt='%.10f')
-            np.savetxt(os.path.join(name, name + '_R.txt'), R, fmt='%.10f')
-            np.savetxt(os.path.join(name, name + '_t.txt'), t, fmt='%.10f')
-            
+        try:
+            if len(self.imagePlane.scene.point_items.keys()) and len(self.groundPlane.scene.point_items.keys()) and self.groundPlane.scene.utm:
+                image_points = self.imagePlane.scene.returnPoints()
+                if self.groundPlane.scene.utm:
+                    georef_points = self.groundPlane.scene.returnUTMPoints()
+                
+                imagePoints_mat = matlab.double(image_points.tolist())
+                worldPoints_mat = matlab.double(georef_points.tolist())
+                cameraIntrinsics = eng.eval("cameraParams.Intrinsics", nargout=1)
+                eng.workspace["worldPoints_mat"] = worldPoints_mat
+                eng.workspace["worldPose"] = eng.estworldpose(
+                    imagePoints_mat,
+                    worldPoints_mat,
+                    cameraIntrinsics,
+                    "MaxNumTrials",
+                    matlab.single(2000),
+                    "Confidence",
+                    matlab.single(98),
+                    "MaxReprojectionError",
+                    matlab.single(2),
+                    nargout=1
+                )
+                eng.eval(f"""
+                        pcshow(worldPoints_mat, VerticalAxis="Y", VerticalAxisDir="down", MarkerSize=30);
+                        hold on
+                        plotCamera(Size=10, Orientation=worldPose.R', Location=worldPose. Translation);
+                        hold off
+                        """, nargout=0)
+                K, R, t = np.array(eng.eval("cameraParams.Intrinsics.K")), np.array(eng.eval("worldPose.R")), np.array(eng.eval("worldPose.Translation")).reshape((3, 1))
+                
+                name = os.path.splitext(os.path.basename(self.filename))[0]
+                if not os.path.exists(name):
+                    os.makedirs(name)
+                
+                np.savetxt(os.path.join(name, name + '_K.txt'), K, fmt='%.10f')
+                np.savetxt(os.path.join(name, name + '_R.txt'), R, fmt='%.10f')
+                np.savetxt(os.path.join(name, name + '_t.txt'), t, fmt='%.10f')
+        except:
+            print('Error in calibrating the camera..Either matlab engine is not installed or the points are not set properly')
+                
     def actionLoadCameraParams(self):
         
         if self.groundPlane.scene.file_loaded and self.groundPlane.scene.utm:
@@ -616,6 +796,13 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         timage_points = timage_points[:, :2] / timage_points[:, [2]]
         return timage_points
     
+    def getReReprojectedPoints(self, ground_points):
+        
+        hground_points = np.hstack((ground_points, np.ones((ground_points.shape[0], 1))))
+        tground_points = hground_points @ np.linalg.inv(self.homMatrix).T    
+        tground_points = tground_points[:, :2] / tground_points[:, [2]]
+        return tground_points
+    
     def actionHomography(self):
         
         image_points = self.imagePlane.scene.returnPoints()
@@ -646,7 +833,6 @@ class AnnotationWindow(QtWidgets.QMainWindow):
                 cv_ground = cv2.circle(cv_ground, rp, 2, (0, 0, 255), 2)
             
             self.homdialog.setImage(cv_ground, reproject=True)
-            
             self.homdialog.show()
     
     def create_menus(self):
@@ -661,9 +847,11 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         menu_instructions = self.menuBar().addMenu("Intructions")
         polygon_action1 = menu_instructions.addAction("Point - Image Plane")
         polygon_action2 = menu_instructions.addAction("Point - Ground Plane")
+        polygon_action3 = menu_instructions.addAction("Polygon - Ground Plane")
         
         polygon_action1.triggered.connect(partial(self.imagePlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
         polygon_action2.triggered.connect(partial(self.groundPlane.scene.setCurrentInstruction, Instructions.Point_Instruction))
+        polygon_action3.triggered.connect(partial(self.groundPlane.scene.setCurrentInstruction, Instructions.Polygon_Instruction))
     
     @QtCore.pyqtSlot()
     def load_image(self, view):
