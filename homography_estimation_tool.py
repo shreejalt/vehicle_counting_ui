@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from collections import defaultdict
 import os
+import json
 import rasterio
 
 # Import the Matlab engine if installed
@@ -19,6 +20,15 @@ except ImportError:
 
 
 def convert_cv_qt(cv_img, rgb=False):
+    """
+    Convert a OpenCV image to a Qt pixmap.
+    Args:
+        cv_img (numpy.ndarray): The OpenCV image to be converted.
+        rgb (bool, optional): Flag indicating whether the image is in RGB format. 
+                              Defaults to False.
+    Returns:
+        QtGui.QPixmap: The converted Qt pixmap.
+    """
     
     rgb_image = cv_img
     if not rgb:
@@ -32,6 +42,14 @@ def convert_cv_qt(cv_img, rgb=False):
     return QtGui.QPixmap.fromImage(p)
 
 def pixel_to_utm(px, transform_matrix):
+    """
+    Converts pixel coordinates to UTM coordinates using a given transformation matrix.
+    Args:
+        px (tuple): A tuple containing the pixel coordinates (row, column).
+        transform_matrix (numpy.ndarray): The transformation matrix used to convert pixel coordinates to UTM coordinates.
+    Returns:
+        tuple: A tuple containing the UTM coordinates (utm_x, utm_y).
+    """
     utm_x, utm_y = rasterio.transform.xy(transform_matrix, px[1], px[0])
     return utm_x, utm_y
 
@@ -41,6 +59,21 @@ class Instructions(Enum):
     Polygon_Instruction = 2
 
 class ImagePopup(QtWidgets.QDialog):
+    
+    """
+    A dialog window for displaying images.
+    Args:
+        parent: The parent widget of the dialog.
+    Attributes:
+        label_warped (QtWidgets.QLabel): QLabel widget for displaying the warped image.
+        label_reprojected (QtWidgets.QLabel): QLabel widget for displaying the reprojected image.
+        layout (QtWidgets.QVBoxLayout): QVBoxLayout for arranging the image labels.
+    Methods:
+        __init__(self, parent): Initializes the ImagePopup dialog.
+        setImage(self, img, reproject=False): Sets the image to be displayed in the dialog.
+        resetImage(self): Clears the displayed images in the dialog.
+    """
+    
     def __init__(self, parent):
         super().__init__(parent)
         
@@ -54,7 +87,7 @@ class ImagePopup(QtWidgets.QDialog):
         # self.adjustSize()
     
     def setImage(self, img, reproject=False):
-        
+        cv2.imwrite('result_reprojection.jpg', img)
         pix_img = convert_cv_qt(img)
         if reproject:
             self.label_reprojected.setPixmap(pix_img)
@@ -66,6 +99,25 @@ class ImagePopup(QtWidgets.QDialog):
         self.label_reprojected.clear()
         
 class GripItem(QtWidgets.QGraphicsPathItem):
+    """
+    A custom QGraphicsPathItem representing a moving point for annotation items.
+    Args:
+        annotation_item (QtWidgets.QGraphicsItem): The parent annotation item.
+        id (int, optional): The ID of the grip item. Defaults to 0.
+        polygon_id (int, optional): The ID of the polygon. Defaults to 0.
+    Attributes:
+        circle (QtGui.QPainterPath): The path representing a circle shape.
+        square (QtGui.QPainterPath): The path representing a square shape.
+        annotation_item (QtWidgets.QGraphicsItem): The parent annotation item.
+        id (int): The ID of the grip item.
+        polygon_id (int): The ID of the polygon.
+        set (bool): Flag indicating if the grip item is set.
+    Methods:
+        hoverEnterEvent(event): Event handler for hover enter event.
+        hoverLeaveEvent(event): Event handler for hover leave event.
+        mouseReleaseEvent(event): Event handler for mouse release event.
+        itemChange(change, value): Event handler for item change event.
+    """
     
     circle = QtGui.QPainterPath()
     circle.addEllipse(QtCore.QRectF(-10, -10, 20, 20))
@@ -130,7 +182,21 @@ class GripItem(QtWidgets.QGraphicsPathItem):
         return super(GripItem, self).itemChange(change, value)
 
 class PointAnnotation(QtWidgets.QGraphicsItem):
-    
+    """
+    A class representing a point annotation in a graphics item.
+    Attributes:
+        coords (QtWidgets.QGraphicsTextItem): The text item displaying the coordinates of the point.
+        point (GripItem): The grip item representing the point.
+        parent: The parent item of the point annotation.
+        set (bool): Indicates whether the point has been set or not.
+        utm_coords: The UTM coordinates of the point.
+    Properties:
+        points (tuple): The x and y coordinates of the point.
+        utm_points (list): The UTM coordinates of the point.
+    Methods:
+        setPoint(p, id): Sets the point and displays its ID.
+        movePoint(id, pos): Moves the point to the specified position and updates its ID.
+    """
     def __init__(self, parent=None):
         super(PointAnnotation, self).__init__()
         self.setZValue(10)
@@ -177,6 +243,30 @@ class PointAnnotation(QtWidgets.QGraphicsItem):
         self.coords.setPlainText(f'ID: {id}')
 
 class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
+    
+    """
+    A custom QGraphicsPolygonItem subclass for polygon annotation.
+    Attributes:
+        items (list): A list of GripItem objects representing the control points of the polygon.
+        points (list): A list of QPointF objects representing the vertices of the polygon.
+        label (str): The label associated with the polygon.
+        calling_class: The calling class object.
+        id: A QGraphicsTextItem object representing the ID of the polygon.
+    Methods:
+        numPoints(): Returns the number of control points in the polygon.
+        polypoints(): Returns the vertices of the polygon as a numpy array.
+        getPoints(): Returns the mean position of the control points.
+        moveLabel(): Moves the ID label to the mean position of the control points.
+        addPoint(p): Adds a control point to the polygon.
+        setItemPos(i, pos): Sets the position of a control point.
+        removeLastPoint(): Removes the last control point from the polygon.
+        movePoint(i, p): Moves a control point to a new position.
+        move_item(index, pos): Moves a control point item to a new position.
+        itemChange(change, value): Overrides the itemChange method to handle control point movement.
+        hoverEnterEvent(event): Overrides the hoverEnterEvent method to handle hover enter event.
+        hoverLeaveEvent(event): Overrides the hoverLeaveEvent method to handle hover leave event.
+    
+    """
     
     def __init__(self, parent=None, calling_class=None):
         super(PolygonAnnotation, self).__init__(parent)
@@ -254,7 +344,6 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
             
     def move_item(self, index, pos):
         if 0 <= index < len(self.items):
-            print('Change in the polygon')
             item = self.items[index]
             item.setEnabled(False)
             item.setPos(pos)
@@ -278,7 +367,50 @@ class PolygonAnnotation(QtWidgets.QGraphicsPolygonItem):
         super(PolygonAnnotation, self).hoverLeaveEvent(event)
  
 class HomographyScene(QtWidgets.QGraphicsScene):
-        
+    """
+    A QGraphicsScene subclass for handling homography estimation and annotation in a graphical scene.
+    Args:
+        parent (QWidget): The parent widget.
+        is_ground_plane (bool): Flag indicating if the scene represents the ground plane.
+        show_utm (bool): Flag indicating if UTM coordinates should be shown.
+    Attributes:
+        viewer (QWidget): The parent widget.
+        is_ground_plane (bool): Flag indicating if the scene represents the ground plane.
+        show_utm (bool): Flag indicating if UTM coordinates should be shown.
+        file_loaded (bool): Flag indicating if a file has been loaded.
+        image_item (QGraphicsPixmapItem): The item for displaying an image.
+        current_instruction (Instructions): The current instruction for annotation.
+        player (QMediaPlayer): The media player for playing videos.
+        video_item (QGraphicsVideoItem): The item for displaying a video.
+        point_item (PointAnnotation): The current point annotation item.
+        polygon_item (PolygonAnnotation): The current polygon annotation item.
+        instruction (Instructions): The current instruction for annotation.
+        current_mouse_coords (QGraphicsTextItem): The item for displaying current mouse coordinates.
+        point_items (defaultdict): Dictionary for storing point annotation items.
+        polygon_items (defaultdict): Dictionary for storing polygon annotation items.
+        reprojected_polygons (defaultdict): Dictionary for storing reprojected polygons.
+        point_id (int): The ID for the next point annotation.
+        polygon_id (int): The ID for the next polygon annotation.
+        reprojected_polygon_id (int): The ID for the next reprojected polygon.
+        image_width (int): The width of the loaded image.
+        image_height (int): The height of the loaded image.
+        orthophoto_set (bool): Flag indicating if an orthophoto has been set.
+        utm (bool): Flag indicating if UTM coordinates should be shown.
+        item_loaded (str): The type of item loaded ('image' or 'video').
+        image_filename (str): The filename of the loaded image.
+        ground_orthophoto (rasterio.DatasetReader): The orthophoto dataset for the ground plane.
+        transform_matrix (affine.Affine): The transformation matrix for the orthophoto.
+    Methods:
+        set_default(): Set default values for the scene.
+        load_points(points): Load point annotations into the scene.
+        load_utm_points(points): Load UTM coordinates for point annotations.
+        load_image(filename): Load an image or video into the scene.
+        setCurrentInstruction(instruction, dont_recurse=False): Set the current annotation instruction.
+        deleteLastPoint(): Delete the last point annotation.
+        deleteLastPolygon(dont_recurse=False): Delete the last polygon annotation.
+        loadROI(filename): Load regions of interest (ROIs) from a file.
+    """
+    
     def __init__(self, parent=None, is_ground_plane=False, show_utm=False):
         
         super(HomographyScene, self).__init__(parent)
@@ -305,6 +437,7 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         
         self.point_item = None
         self.polygon_item = None
+        self.roi = None
         self.instruction = Instructions.No_Instruction
         self.current_mouse_coords = None
        
@@ -438,7 +571,59 @@ class HomographyScene(QtWidgets.QGraphicsScene):
                     self.viewer.imagePlane.scene.deleteLastPolygon(dont_recurse=True)
                 else:
                     self.viewer.groundPlane.scene.deleteLastPolygon(dont_recurse=True)
-                
+
+    def load_roi(self, filename):        
+        with open(filename, 'r') as f:
+            rois = json.load(f)
+            self.roi = rois
+        if self.viewer.homMatrix is not None:
+            for key in rois.keys():
+                if key != 'group':
+                    points = np.array(rois[key]['roi'])
+                    points[:, 0] *= self.image_width
+                    points[:, 1] *= self.image_height
+                    self.polygon_item = PolygonAnnotation(calling_class=self)
+                    self.polygon_item.label = self.polygon_id
+                    self.addItem(self.polygon_item)
+                    if not self.is_ground_plane:
+                        self.viewer.groundPlane.scene.polygon_item = PolygonAnnotation(calling_class=self.viewer.groundPlane.scene)
+                        self.viewer.groundPlane.scene.polygon_item.label = self.polygon_id
+                        self.viewer.groundPlane.scene.addItem(self.viewer.groundPlane.scene.polygon_item)
+                 
+                    for p in points:
+                        
+                        self.polygon_item.removeLastPoint()
+                        self.polygon_item.addPoint(self.convertToPyQt(p))
+                        self.polygon_item.addPoint(self.convertToPyQt(p))
+                        
+                        if not self.is_ground_plane:
+                            
+                            pos_ground = self.convertToNumpy(self.convertToPyQt(p))
+                            reproj_point = self.viewer.getReprojectedPoints(pos_ground)
+                            pos_ground_pyqt = self.convertToPyQt(reproj_point[0])
+                            self.viewer.groundPlane.scene.polygon_item.removeLastPoint()
+                            self.viewer.groundPlane.scene.polygon_item.addPoint(pos_ground_pyqt)
+                            self.viewer.groundPlane.scene.polygon_item.addPoint(pos_ground_pyqt)
+                        
+                    self.polygon_item.removeLastPoint()
+                    self.polygon_items[self.polygon_id] = self.polygon_item
+                    self.polygon_item.moveLabel()
+                    self.polygon_id += 1
+                    
+                    if not self.is_ground_plane:
+                        self.viewer.groundPlane.scene.polygon_item.removeLastPoint()
+                        self.viewer.groundPlane.scene.polygon_items[self.viewer.groundPlane.scene.polygon_id] = self.viewer.groundPlane.scene.polygon_item
+                        self.viewer.groundPlane.scene.polygon_item.moveLabel()
+                        
+                        self.viewer.groundPlane.scene.polygon_id += 1
+    
+            self.polygon_item = None
+            if not self.is_ground_plane:
+                self.viewer.groundPlane.scene.polygon_item = None
+
+        else:
+            print('Cant load the ROI without setting the homography matrix')
+    
     def mousePressEvent(self, event):
         
         if self.current_instruction == Instructions.Point_Instruction and event.button() == Qt.MouseButton.LeftButton:
@@ -492,7 +677,6 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         
         return np.array(coords)
     
-    
     def convertToNumpy(self, point):
 
         return np.array((point.x(), point.y())).reshape(1, -1)
@@ -518,6 +702,8 @@ class HomographyScene(QtWidgets.QGraphicsScene):
             if self.utm:
                 x, y = int(event.scenePos().x()), int(event.scenePos().y())
                 utm_x, utm_y = pixel_to_utm((x, y), self.transform_matrix)
+                utm_x -= self.transform_matrix.c
+                utm_y -= self.transform_matrix.f
                 set_x, set_y = utm_x, utm_y
             
             self.current_mouse_coords.setPlainText(f'{set_x: .1f}, {set_y: .1f}')
@@ -542,6 +728,38 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         super(HomographyScene, self).mouseMoveEvent(event)
         
 class HomographyViewer(QtWidgets.QGraphicsView):
+    
+    """
+    A custom QGraphicsView widget for displaying and interacting with a homography scene.
+    Signals:
+        rightMouseButtonPressed: Signal emitted when the right mouse button is pressed.
+            Parameters:
+                - x (float): The x-coordinate of the scene position.
+                - y (float): The y-coordinate of the scene position.
+        rightMouseButtonReleased: Signal emitted when the right mouse button is released.
+            Parameters:
+                - x (float): The x-coordinate of the scene position.
+                - y (float): The y-coordinate of the scene position.
+        rightMouseButtonDoubleClicked: Signal emitted when the right mouse button is double-clicked.
+            Parameters:
+                - x (float): The x-coordinate of the scene position.
+                - y (float): The y-coordinate of the scene position.
+    Args:
+        parent (QWidget): The parent widget.
+        is_ground_plane (bool): Flag indicating whether the scene represents a ground plane.
+        show_utm (bool): Flag indicating whether to show UTM coordinates.
+    Attributes:
+        zoomStack (list): A list to store the zoom stack.
+        aspectRatioMode (Qt.AspectRatioMode): The aspect ratio mode for fitting the view.
+        scene (HomographyScene): The homography scene.
+        is_ground_plane (bool): Flag indicating whether the scene represents a ground plane.
+    Methods:
+        updateViewer(): Updates the viewer based on the zoom stack.
+        mousePressEvent(event): Event handler for mouse press events.
+        mouseReleaseEvent(event): Event handler for mouse release events.
+        resizeEvent(event): Event handler for resize events.
+        mouseDoubleClickEvent(event): Event handler for mouse double-click events.
+    """
 
     rightMouseButtonPressed = pyqtSignal(float, float)
     rightMouseButtonReleased = pyqtSignal(float, float)
@@ -605,6 +823,24 @@ class HomographyViewer(QtWidgets.QGraphicsView):
         QtWidgets.QGraphicsView.mouseDoubleClickEvent(self, event)
 
 class AnnotationWindow(QtWidgets.QMainWindow):
+    """
+    A class representing the Annotation Window for the Homography Estimation Tool.
+    Attributes:
+        imagePlane (HomographyViewer): The viewer for the image plane.
+        groundPlane (HomographyViewer): The viewer for the ground plane.
+        homdialog (ImagePopup): The popup window for displaying the homography.
+        homMatrix (numpy.ndarray): The homography matrix.
+        filename (str): The path of the file being processed.
+        fowrwad_milliseconds (int): The number of milliseconds to forward the video.
+    Methods:
+        __init__(self, parent=None): Initializes the AnnotationWindow object.
+        actionDeleteLastPoint(self, view): Deletes the last point in the specified view.
+        actionDeleteLastPolygon(self, view): Deletes the last polygon in the specified view.
+        actionCalibrateCamera(self): Calibrates the camera using the image and ground points.
+        actionLoadHomography(self): Loads the homography matrix from a file.
+        actionLoadCameraParams(self): Loads the camera parameters from a file.
+        setPoints(self, filename): Sets the image and ground points from the specified file.
+    """
     def __init__(self, parent=None):
         super(AnnotationWindow, self).__init__(parent)
 
@@ -645,6 +881,10 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.savePointsButton = QPushButton() 
         self.savePointsButton.setText('Save Progress')
         self.savePointsButton.clicked.connect(self.actionSaveProgress)
+        
+        self.savePolygonsButton = QPushButton()
+        self.savePolygonsButton.setText('Save Polygons')
+        self.savePolygonsButton.clicked.connect(self.actionSavePolygons)
 
         self.homographyButton = QPushButton()
         self.homographyButton.setText('Homography')
@@ -662,9 +902,17 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.loadPointsButton.setText('Load Points')
         self.loadPointsButton.clicked.connect(self.actionLoadPoints)
         
+        self.loadHomographyButton = QPushButton()
+        self.loadHomographyButton.setText('Load Homography')
+        self.loadHomographyButton.clicked.connect(self.actionLoadHomography)
+        
         self.loadCameraParams = QPushButton()
         self.loadCameraParams.setText('Load Camera Intrinsics')
         self.loadCameraParams.clicked.connect(self.actionLoadCameraParams)
+        
+        self.loadROI = QPushButton()
+        self.loadROI.setText('Load ROI')
+        self.loadROI.clicked.connect(self.actionLoadROI)
         
         self.reprojErroLabel = QtWidgets.QLabel()
         self.reprojErroLabel.setText('')
@@ -678,15 +926,17 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.buttonLayout.addWidget(self.deleteLastPointButtonGround)
         self.buttonLayout.addWidget(self.deleteLastPolygonButton)
         self.buttonLayout.addWidget(self.homographyButton)
+        self.buttonLayout.addWidget(self.loadHomographyButton)
         self.buttonLayout.addWidget(self.savePointsButton)
+        self.buttonLayout.addWidget(self.savePolygonsButton)
         self.buttonLayout.addWidget(self.reprojErrorButton)
         self.buttonLayout.addWidget(self.loadPointsButton)
+        self.buttonLayout.addWidget(self.loadROI)
         self.buttonLayout.addWidget(self.loadCameraParams)
         self.buttonLayout.addWidget(self.calibrationButton)
         
         self.buttonLayout.addWidget(self.reprojErroLabelText)
         self.buttonLayout.addWidget(self.reprojErroLabel)
-        
         
         self.mainLayout = QVBoxLayout()
         self.mainLayout.addLayout(self.imageLayout)
@@ -713,7 +963,7 @@ class AnnotationWindow(QtWidgets.QMainWindow):
     def actionDeleteLastPolygon(self, view):
         view.scene.deleteLastPolygon()
     
-    def actionCalibrateCamera(self):
+    def actionCalibrateCamera(self): # Only supports pinhole camera calibration
         try:
             if len(self.imagePlane.scene.point_items.keys()) and len(self.groundPlane.scene.point_items.keys()) and self.groundPlane.scene.utm:
                 image_points = self.imagePlane.scene.returnPoints()
@@ -753,7 +1003,21 @@ class AnnotationWindow(QtWidgets.QMainWindow):
                 np.savetxt(os.path.join(name, 't.txt'), t, fmt='%.10f')
         except:
             print('Error in calibrating the camera..Either matlab engine is not installed or the points are not set properly')
-                
+    
+
+    def actionLoadHomography(self):
+            
+        if self.imagePlane.scene.file_loaded and self.groundPlane.scene.file_loaded:
+            fileName, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open Homography File",
+                    QtCore.QDir.homePath())
+            if fileName:
+                self.homMatrix = np.loadtxt(fileName).astype(float)
+        else:
+            diag = QMessageBox()
+            diag.setWindowTitle('Runtime Warning..')
+            diag.setText('Please load the ground and camera views first. Then try to load the homography!')
+            diag.exec()
+    
     def actionLoadCameraParams(self):
         
         if self.groundPlane.scene.file_loaded and self.groundPlane.scene.utm:
@@ -798,6 +1062,17 @@ class AnnotationWindow(QtWidgets.QMainWindow):
             diag.setText('Please load the ground and camera views first. Then try to load the set points!')
             diag.exec()
 
+    def actionSavePolygons(self):
+        
+        for label, polygon in self.imagePlane.scene.polygon_items.items():
+            polypoints = polygon.polypoints
+            polypoints[:, 0] /= self.imagePlane.scene.image_width
+            polypoints[:, 1] /= self.imagePlane.scene.image_height
+            self.imagePlane.scene.roi[str(label + 1)]['roi'] = polypoints.tolist()
+        
+        with open(f"{os.path.splitext(os.path.basename(self.filename))[0]}.json", 'w') as f:
+            json.dump(self.imagePlane.scene.roi, f)
+            
     def actionSaveProgress(self):
     
         if len(self.imagePlane.scene.point_items.keys()) and len(self.groundPlane.scene.point_items.keys()):
@@ -845,7 +1120,20 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         self.filename = None
         self.homdialog.resetImage()
         
-        
+    def actionLoadROI(self):
+            
+            if self.imagePlane.scene.file_loaded and self.groundPlane.scene.file_loaded:
+                fileName, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open ROI File",
+                        QtCore.QDir.homePath())
+                if fileName is not None and self.homMatrix is not None:
+                    self.imagePlane.scene.load_roi(fileName)
+            else:
+                diag = QMessageBox()
+                diag.setWindowTitle('Runtime Warning..')
+                diag.setText('Please load the ground and camera views first. Then try to load the set points!')
+                diag.exec()
+    
+    
     def actionReprojError(self):
         
         if self.homMatrix is not None:

@@ -337,7 +337,8 @@ class QtPolygonViewer(QtWidgets.QGraphicsView):
 
 class VideoCountingAnnotation(QMainWindow):
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None):        
+        
         super(VideoCountingAnnotation, self).__init__(parent=parent)
         self.setWindowTitle('Video Counting Annotation Tool')
         
@@ -556,8 +557,8 @@ class VideoCountingAnnotation(QMainWindow):
     def actionSavePolygon(self):
         
         roi_dict = defaultdict(dict)
-        # Assert that the all lane labels sums up to the individual lane labels
         
+        # Assert that the all lane labels sums up to the individual lane labels
         for label, polygon in self.annotationView.scene.clicks_inside_polygon.items():
             points = np.empty(shape=(0, 2))
             for point in polygon.m_points:
