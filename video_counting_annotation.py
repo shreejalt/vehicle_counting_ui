@@ -178,6 +178,7 @@ class AnnotationScene(QtWidgets.QGraphicsScene):
         self.player = QtMultimedia.QMediaPlayer()
         self.video_item = QtMultimediaWidgets.QGraphicsVideoItem()
         self.video_item.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.CrossCursor))
+        self.video_item.setSize(QtCore.QSizeF(2560, 1440))
         self.player.setVideoOutput(self.video_item)
         self.addItem(self.video_item)
         

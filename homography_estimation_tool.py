@@ -433,6 +433,7 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         self.video_item = QtMultimediaWidgets.QGraphicsVideoItem()
         self.video_item.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.CrossCursor))
         self.video_item.setSize(QSizeF(3840, 2160))
+        self.video_item.nativeSizeChanged.connect(self.on_native_size_changed)
         self.player.setVideoOutput(self.video_item)
         
         self.point_item = None
@@ -452,7 +453,15 @@ class HomographyScene(QtWidgets.QGraphicsScene):
         self.orthophoto_set = False
         self.utm = False
         self.item_loaded = None
-        
+    
+    def on_native_size_changed(self, size):
+        """
+        Event handler for native size change of the video item.
+        Args:
+            size (QSizeF): The new size of the video item.
+        """
+        self.video_item.setSize(size)
+        self.setSceneRect(self.video_item.boundingRect())
     def load_points(self, points):
         
         for p in points:
@@ -494,7 +503,7 @@ class HomographyScene(QtWidgets.QGraphicsScene):
             self.setSceneRect(self.image_item.boundingRect())
             self.item_loaded = 'image'
             
-        elif ('mp4' in filename):
+        elif ('mp4' in filename) or ('avi' in filename):
             self.player.setSource(QUrl.fromLocalFile(filename))
             self.addItem(self.video_item)
             self.setSceneRect(self.video_item.boundingRect())
@@ -698,15 +707,22 @@ class HomographyScene(QtWidgets.QGraphicsScene):
     def mouseMoveEvent(self, event):
         
         set_x, set_y = int(event.scenePos().x()), int(event.scenePos().y())
+        if self.is_ground_plane:
+            if (set_x >= 0 and set_x <= self.width()) and (set_y >= 0 and set_y <= self.height() and self.current_mouse_coords is not None):
+                elevation = self.elevation_map[set_y, set_x]
+            else:
+                elevation = 0
+        else:
+            elevation = 0
         if (set_x >= 0 and set_x <= self.width()) and (set_y >= 0 and set_y <= self.height() and self.current_mouse_coords is not None):
             if self.utm:
                 x, y = int(event.scenePos().x()), int(event.scenePos().y())
                 utm_x, utm_y = pixel_to_utm((x, y), self.transform_matrix)
-                utm_x -= self.transform_matrix.c
-                utm_y -= self.transform_matrix.f
+                # utm_x -= self.transform_matrix.c
+                # utm_y -= self.transform_matrix.f
                 set_x, set_y = utm_x, utm_y
-            
-            self.current_mouse_coords.setPlainText(f'{set_x: .1f}, {set_y: .1f}')
+                
+            self.current_mouse_coords.setPlainText(f'{set_x: .1f}, {set_y: .1f}, {elevation: .1f}')
             self.current_mouse_coords.setPos(int(event.scenePos().x()), int(event.scenePos().y()))
         
         # You can't draw the polygon unless the homography is set
@@ -967,24 +983,43 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         try:
             if len(self.imagePlane.scene.point_items.keys()) and len(self.groundPlane.scene.point_items.keys()) and self.groundPlane.scene.utm:
                 image_points = self.imagePlane.scene.returnPoints()
+                
                 if self.groundPlane.scene.utm:
                     georef_points = self.groundPlane.scene.returnUTMPoints()
-                
+                origin = np.mean(georef_points, axis=0)
+                georef_points -= origin
+                georef_points = np.array(georef_points)
                 imagePoints_mat = matlab.double(image_points.tolist())
                 worldPoints_mat = matlab.double(georef_points.tolist())
                 cameraIntrinsics = eng.eval("cameraParams.Intrinsics", nargout=1)
+                
                 eng.workspace["worldPoints_mat"] = worldPoints_mat
+                eng.workspace["imagePoints_mat"] = imagePoints_mat
+                
+                eng.workspace["imagePoints_mat_undistored"] = eng.undistortPoints(
+                    eng.workspace["imagePoints_mat"],
+                    cameraIntrinsics
+                )
+                
                 eng.workspace["worldPose"] = eng.estworldpose(
-                    imagePoints_mat,
+                    eng.workspace["imagePoints_mat_undistored"],
                     worldPoints_mat,
                     cameraIntrinsics,
                     "MaxNumTrials",
-                    matlab.single(2000),
+                    matlab.single(5000),
                     "Confidence",
-                    matlab.single(98),
+                    matlab.single(95),
                     "MaxReprojectionError",
-                    matlab.single(2),
+                    matlab.single(3),
                     nargout=1
+                )
+                
+                eng.workspace["reprojCoords"] = eng.world2img(
+                    worldPoints_mat,
+                    eng.workspace["worldPose"],
+                    cameraIntrinsics,
+                    "ApplyDistortion",
+                    True
                 )
                 eng.eval(f"""
                         pcshow(worldPoints_mat, VerticalAxis="Y", VerticalAxisDir="down", MarkerSize=30);
@@ -993,14 +1028,19 @@ class AnnotationWindow(QtWidgets.QMainWindow):
                         hold off
                         """, nargout=0)
                 K, R, t = np.array(eng.eval("cameraParams.Intrinsics.K")), np.array(eng.eval("worldPose.R")), np.array(eng.eval("worldPose.Translation")).reshape((3, 1))
-                
+                reproj_points = np.array(eng.eval("reprojCoords")).reshape(-1, 2)
+                image_points_undistored = np.array(eng.eval("imagePoints_mat_undistored")).reshape(-1, 2)
                 name = os.path.splitext(os.path.basename(self.filename))[0]
+                t+= origin.reshape((3, 1))
                 if not os.path.exists(name):
                     os.makedirs(name)
                 
                 np.savetxt(os.path.join(name, 'K.txt'), K, fmt='%.10f')
                 np.savetxt(os.path.join(name, 'R.txt'), R, fmt='%.10f')
                 np.savetxt(os.path.join(name, 't.txt'), t, fmt='%.10f')
+                np.savetxt(os.path.join(name, 'reproj_points.txt'), reproj_points, fmt='%.10f')
+                np.savetxt(os.path.join(name, 'image_points_undistored.txt'), image_points_undistored, fmt='%.10f')
+                
         except:
             print('Error in calibrating the camera..Either matlab engine is not installed or the points are not set properly')
     
@@ -1221,7 +1261,7 @@ class AnnotationWindow(QtWidgets.QMainWindow):
         
         formats = '*.png *.jpg *.bmp *.tif'
         if view == self.imagePlane:
-            formats += ' *.mp4'
+            formats += ' *.avi *.mp4'
             
         filename, _ = QtWidgets.QFileDialog.getOpenFileName(self, 
             "Open Image",
